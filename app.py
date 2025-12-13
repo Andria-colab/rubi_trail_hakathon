@@ -1,22 +1,19 @@
 import os
-import io
-import hmac
-import json
-import hashlib
 import sqlite3
 import secrets
+import hmac
+import hashlib
+import urllib.parse
 from datetime import datetime
-from urllib.parse import parse_qsl
 
-import qrcode
 import requests
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
+import io
+import qrcode
 
-# ------------------------------------------------------------
-# App setup
-# ------------------------------------------------------------
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
@@ -28,91 +25,82 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 
 # ------------------------------------------------------------
-# Telegram WebApp initData verification
+# Telegram helpers (verify initData)
 # ------------------------------------------------------------
-def verify_telegram_webapp_init_data(init_data: str) -> dict | None:
+def verify_telegram_init_data(init_data: str, bot_token: str):
     """
-    Verifies Telegram WebApp initData signature.
-    Returns parsed dict (with "user" etc) if valid, else None.
+    Verifies Telegram Mini App initData.
+    Returns dict of parsed values if valid, otherwise None.
     """
-    if not TELEGRAM_BOT_TOKEN:
-        return None
-    if not init_data:
+    if not init_data or not bot_token:
         return None
 
-    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
-    received_hash = pairs.pop("hash", None)
+    # initData is like: "query_id=...&user=...&auth_date=...&hash=..."
+    parsed = urllib.parse.parse_qs(init_data, strict_parsing=False)
+    # parse_qs gives lists
+    data = {k: v[0] for k, v in parsed.items()}
+
+    received_hash = data.pop("hash", None)
     if not received_hash:
         return None
 
-    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs.keys()))
+    # Create data_check_string
+    pairs = []
+    for k in sorted(data.keys()):
+        pairs.append(f"{k}={data[k]}")
+    data_check_string = "\n".join(pairs)
 
-    secret_key = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode("utf-8")).digest()
-    calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    secret_key = hmac.new(
+        key=b"WebAppData",
+        msg=bot_token.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).digest()
+
+    calculated_hash = hmac.new(
+        key=secret_key,
+        msg=data_check_string.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
 
     if not hmac.compare_digest(calculated_hash, received_hash):
         return None
 
-    # Parse JSON fields
-    if "user" in pairs:
-        try:
-            pairs["user"] = json.loads(pairs["user"])
-        except Exception:
-            pass
-
-    return pairs
+    return data
 
 
-# ------------------------------------------------------------
-# Telegram helpers
-# ------------------------------------------------------------
 def telegram_send_message(chat_id: str, text: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN not set -> skipping telegram message")
+        print("TELEGRAM_BOT_TOKEN missing -> cannot send")
         return False
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        resp = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": False},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            print("Telegram sendMessage failed:", resp.status_code, resp.text)
+        r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        if r.status_code != 200:
+            print("sendMessage failed:", r.status_code, r.text)
             return False
         return True
     except Exception as e:
-        print("Telegram sendMessage exception:", repr(e))
+        print("sendMessage exception:", repr(e))
         return False
 
 
-def telegram_send_qr_photo(chat_id: str, redeem_url: str, caption: str) -> bool:
-    """
-    Generates a QR code PNG for redeem_url and sends it via Telegram sendPhoto.
-    """
+def telegram_send_photo(chat_id: str, caption: str, png_bytes: bytes) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN not set -> skipping telegram photo")
+        print("TELEGRAM_BOT_TOKEN missing -> cannot send")
         return False
-
-    img = qrcode.make(redeem_url)
-    bio = io.BytesIO()
-    img.save(bio, format="PNG")
-    bio.seek(0)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     try:
-        resp = requests.post(
-            url,
-            data={"chat_id": chat_id, "caption": caption},
-            files={"photo": ("voucher.png", bio, "image/png")},
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            print("Telegram sendPhoto failed:", resp.status_code, resp.text)
+        files = {"photo": ("voucher.png", png_bytes, "image/png")}
+        data = {"chat_id": chat_id, "caption": caption}
+        r = requests.post(url, data=data, files=files, timeout=15)
+        if r.status_code != 200:
+            print("sendPhoto failed:", r.status_code, r.text)
             return False
         return True
     except Exception as e:
-        print("Telegram sendPhoto exception:", repr(e))
+        print("sendPhoto exception:", repr(e))
         return False
 
 
@@ -187,7 +175,7 @@ def init_db():
         """
     )
 
-    # seed once
+    # seed rewards
     cur = db.execute("SELECT COUNT(*) AS c FROM rewards")
     if cur.fetchone()["c"] == 0:
         db.executemany(
@@ -237,49 +225,50 @@ def home():
 @app.post("/auth/telegram")
 def auth_telegram():
     """
-    Telegram Mini App auth.
+    Secure Telegram Mini App auth.
     Expects JSON:
       { "initData": "<Telegram.WebApp.initData>" }
     Returns:
-      { "token": "<user_id>", "user": { id, name, coins } }
+      { token, user }
     """
     data = request.get_json(silent=True) or {}
     init_data = str(data.get("initData", "")).strip()
 
-    verified = verify_telegram_webapp_init_data(init_data)
-    if verified is None:
-        return jsonify({"error": "Invalid Telegram initData (signature check failed)"}), 401
+    verified = verify_telegram_init_data(init_data, TELEGRAM_BOT_TOKEN)
+    if not verified:
+        return jsonify({"error": "Invalid Telegram initData"}), 401
 
-    user_obj = verified.get("user") or {}
-    tg_id = user_obj.get("id")
-    if not tg_id:
-        return jsonify({"error": "Telegram user missing in initData"}), 400
+    # user is JSON string
+    user_json = verified.get("user", "")
+    try:
+        import json
+        tg_user = json.loads(user_json)
+    except Exception:
+        return jsonify({"error": "Invalid user payload"}), 400
 
-    name = (
-        user_obj.get("first_name")
-        or user_obj.get("username")
-        or "Telegram User"
-    )
+    telegram_id = str(tg_user.get("id", "")).strip()
+    name = (tg_user.get("first_name") or tg_user.get("username") or "Telegram User").strip()
+
+    if not telegram_id:
+        return jsonify({"error": "Telegram user id missing"}), 400
 
     db = get_db()
     now = datetime.utcnow().isoformat()
 
-    row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (str(tg_id),)).fetchone()
-
+    row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
     if row is None:
         db.execute(
             "INSERT INTO users(telegram_id, name, coins, created_at) VALUES (?, ?, ?, ?)",
-            (str(tg_id), name, 0, now),
+            (telegram_id, name, 0, now),
         )
         db.commit()
-        user_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
     else:
         row = dict(row)
         if name and name != row["name"]:
-            db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
+            db.execute("UPDATE users SET name = ? WHERE telegram_id = ?", (name, telegram_id))
             db.commit()
-        row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (str(tg_id),)).fetchone()
+            row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
 
     row = dict(row)
     return jsonify({"token": str(row["id"]), "user": {"id": row["id"], "name": row["name"], "coins": row["coins"]}})
@@ -305,14 +294,7 @@ def scan_attraction():
             (user["id"], qr_text, now),
         )
     except sqlite3.IntegrityError:
-        return jsonify(
-            {
-                "success": False,
-                "message": "This QR code was already scanned.",
-                "newBalance": user["coins"],
-                "addedCoins": 0,
-            }
-        )
+        return jsonify({"success": False, "message": "This QR code was already scanned.", "newBalance": user["coins"], "addedCoins": 0})
 
     added = 10
     db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (added, user["id"]))
@@ -332,21 +314,18 @@ def buy_reward(reward_id: int):
     reward_row = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
     if reward_row is None:
         return jsonify({"success": False, "message": "Reward not found"}), 404
-
     reward = dict(reward_row)
 
-    # always use latest coins
+    # refresh coins
     user_db = dict(db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone())
 
     if user_db["coins"] < reward["price"]:
         return jsonify({"success": False, "message": "Not enough coins", "newBalance": user_db["coins"]})
 
-    # deduct
-    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user_db["id"]))
-
-    # create voucher
     code = secrets.token_urlsafe(8)
     now = datetime.utcnow().isoformat()
+
+    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user_db["id"]))
     db.execute(
         "INSERT INTO vouchers(user_id, reward_id, code, created_at) VALUES (?, ?, ?, ?)",
         (user_db["id"], reward_id, code, now),
@@ -354,32 +333,22 @@ def buy_reward(reward_id: int):
     db.commit()
 
     new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user_db["id"],)).fetchone()["coins"]
-
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/voucher/{code}"
 
-    # Send to the SAME telegram user id we verified+stored
-    chat_id = str(user_db.get("telegram_id", "")).strip()
-    if chat_id:
-        caption = (
-            f"🎫 Voucher created!\n"
-            f"{reward['title']}\n"
-            f"Code: {code}\n"
-            f"{redeem_url}"
-        )
-        # Prefer QR photo
-        sent = telegram_send_qr_photo(chat_id, redeem_url, caption)
-        if not sent:
-            telegram_send_message(chat_id, caption)
+    # send both link + QR image to correct telegram_id
+    tg_id = str(user_db["telegram_id"])
+    caption = f"🎫 Voucher created!\nReward: {reward['title']}\nCode: {code}\nLink: {redeem_url}"
 
-    return jsonify(
-        {
-            "success": True,
-            "message": "Purchase successful!",
-            "newBalance": new_balance,
-            "voucher": {"code": code, "redeemUrl": redeem_url},
-        }
-    )
+    # generate QR png
+    img = qrcode.make(redeem_url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    telegram_send_photo(tg_id, caption, png_bytes)
+
+    return jsonify({"success": True, "message": "Purchase successful!", "newBalance": new_balance, "voucher": {"code": code, "redeemUrl": redeem_url}})
 
 
 @app.get("/voucher/<code>")
@@ -399,7 +368,6 @@ def voucher_page(code: str):
         return ("Voucher not found", 404)
 
     v = dict(v)
-
     return f"""
     <!doctype html>
     <html>
@@ -407,19 +375,13 @@ def voucher_page(code: str):
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <title>Voucher</title>
-      <style>
-        body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 24px; }}
-        .card {{ max-width: 520px; margin: 0 auto; border: 1px solid #ddd; border-radius: 14px; padding: 18px; }}
-        .code {{ font-size: 22px; font-weight: 800; letter-spacing: 1px; }}
-        .muted {{ color: #666; }}
-      </style>
     </head>
-    <body>
-      <div class="card">
+    <body style="font-family: system-ui; padding: 24px;">
+      <div style="max-width:520px;margin:0 auto;border:1px solid #ddd;border-radius:14px;padding:18px;">
         <h2>{v["title"]}</h2>
-        <p class="muted">{v["description"] or ""}</p>
-        <p class="code">{v["code"]}</p>
-        <p class="muted">Created: {v["created_at"]}</p>
+        <p style="color:#666;">{v["description"] or ""}</p>
+        <p style="font-size:22px;font-weight:800;letter-spacing:1px;">{v["code"]}</p>
+        <p style="color:#666;">Created: {v["created_at"]}</p>
       </div>
     </body>
     </html>

@@ -16,10 +16,9 @@ async function initAuth() {
 
     tg.ready();
 
-    // IMPORTANT: send initData to backend for verification
     const initData = tg.initData;
     if (!initData) {
-      alert("Telegram initData missing.");
+      alert("Telegram initData missing (must be opened as a Mini App).");
       return;
     }
 
@@ -30,25 +29,26 @@ async function initAuth() {
     });
 
     const data = await res.json();
-
     if (!res.ok) {
-      console.error("Auth failed response:", data);
-      alert(data.error || "Auth failed (backend rejected Telegram initData).");
+      console.error("Auth failed:", data);
+      alert("Auth failed: " + (data.error || "unknown"));
       return;
     }
 
     authToken = String(data.token);
-    console.log("✅ Auth token:", authToken);
 
     const balanceElement = document.querySelector(".coin-balance");
     if (balanceElement && data.user) {
       balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
     }
+
+    console.log("✅ Auth OK, token:", authToken);
   } catch (err) {
-    console.error("Auth failed:", err);
-    alert("Could not connect to backend (auth). Is Render backend running?");
+    console.error("Auth error:", err);
+    alert("Cannot connect to backend.");
   }
 }
+
 
 function getAuthHeaders() {
   return {
