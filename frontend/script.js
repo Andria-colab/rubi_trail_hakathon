@@ -1,53 +1,62 @@
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
-// ✅ your Render backend URL (NO trailing slash is fine)
 const API_BASE = "https://rubi-trail-hakathon.onrender.com";
+let authToken = null;
 
-let authToken = null; // backend user id (string)
-
-// ---------- AUTH ----------
+// ---------- AUTH (Telegram Mini App) ----------
 
 async function initAuth() {
   try {
+    const tg = window.Telegram?.WebApp;
+    if (!tg) {
+      alert("Open this inside Telegram (Mini App).");
+      return;
+    }
+
+    tg.ready();
+
+    const tgUser = tg.initDataUnsafe?.user;
+    if (!tgUser?.id) {
+      alert("Telegram user not available.");
+      return;
+    }
+
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        telegram_id: "6732377993",
-        name: "Demo User",
+        telegram_id: String(tgUser.id),
+        name: tgUser.first_name || tgUser.username || "Telegram User",
       }),
     });
 
     const data = await res.json();
-
     if (!res.ok) {
-      console.error("Auth failed response:", data);
+      console.error("Auth failed:", data);
       alert("Auth failed. Check backend logs.");
       return;
     }
 
-    authToken = String(data.token); // e.g. "1"
+    authToken = String(data.token);
     console.log("✅ Auth token:", authToken);
 
-    // update coin balance in header from backend
     const balanceElement = document.querySelector(".coin-balance");
     if (balanceElement && data.user) {
       balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
     }
   } catch (err) {
     console.error("Auth failed:", err);
-    alert("Could not connect to backend (auth). Is Render backend running?");
+    alert("Could not connect to backend.");
   }
 }
 
 function getAuthHeaders() {
   return {
     "Content-Type": "application/json",
-    "Authorization": "Bearer " + authToken,
+    Authorization: "Bearer " + authToken,
   };
 }
 
-// If token missing, try auth again (helps with race conditions)
 async function ensureAuth() {
   if (authToken) return true;
   await initAuth();
@@ -60,14 +69,10 @@ function switchTab(viewId, navElement) {
   showLoading();
 
   setTimeout(() => {
-    const views = document.querySelectorAll(".view-section");
-    views.forEach((view) => view.classList.remove("active"));
+    document.querySelectorAll(".view-section").forEach((v) => v.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach((i) => i.classList.remove("active"));
 
-    const activeView = document.getElementById(viewId);
-    if (activeView) activeView.classList.add("active");
-
-    const navItems = document.querySelectorAll(".nav-item");
-    navItems.forEach((item) => item.classList.remove("active"));
+    document.getElementById(viewId)?.classList.add("active");
     navElement.classList.add("active");
 
     if (viewId === "scan-view") startCamera();
@@ -78,10 +83,9 @@ function switchTab(viewId, navElement) {
 }
 
 const videoElement = document.getElementById("camera-stream");
-let localStream;
+let localStream = null;
 let scanning = false;
 
-// hidden canvas for QR decoding
 const qrCanvas = document.createElement("canvas");
 const qrCtx = qrCanvas.getContext("2d");
 
@@ -138,7 +142,7 @@ function scanLoop() {
 
       const code = jsQR(imageData.data, width, height, { inversionAttempts: "dontInvert" });
 
-      if (code && code.data) {
+      if (code?.data) {
         console.log("✅ QR payload:", code.data);
         scanning = false;
         stopCamera();
@@ -155,14 +159,10 @@ function scanLoop() {
 
 async function handleQRCode(decodedText) {
   const ok = await ensureAuth();
-  if (!ok) {
-    alert("Not authenticated yet. Reload the page.");
-    return;
-  }
+  if (!ok) return alert("Not authenticated.");
 
   showLoading();
   try {
-    // ✅ IMPORTANT: backend expects "qrText"
     const res = await fetch(`${API_BASE}/api/attractions/scan`, {
       method: "POST",
       headers: getAuthHeaders(),
@@ -198,10 +198,7 @@ async function handleQRCode(decodedText) {
 
 async function buyReward(rewardId, titleForAlert) {
   const ok = await ensureAuth();
-  if (!ok) {
-    alert("Not authenticated yet.");
-    return;
-  }
+  if (!ok) return alert("Not authenticated.");
 
   showLoading();
   try {
@@ -225,8 +222,10 @@ async function buyReward(rewardId, titleForAlert) {
         balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
       }
 
-      alert(`✅ Bought: ${titleForAlert}\nVoucher created!\n${data.voucher.redeemUrl}`);
-      console.log("Voucher URL:", data.voucher.redeemUrl);
+      // ✅ IMPORTANT:
+      // Telegram bot sends QR to the user directly.
+      // Frontend only shows success.
+      alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram chat!`);
     } else {
       alert(`❌ ${data.message || "Could not buy reward."}`);
     }
@@ -240,13 +239,11 @@ async function buyReward(rewardId, titleForAlert) {
 // ---------- LOADING OVERLAY ----------
 
 function showLoading() {
-  const el = document.getElementById("loading");
-  if (el) el.classList.add("active");
+  document.getElementById("loading")?.classList.add("active");
 }
 
 function hideLoading() {
-  const el = document.getElementById("loading");
-  if (el) el.classList.remove("active");
+  document.getElementById("loading")?.classList.remove("active");
 }
 
 // ---------- SAFE AREAS ----------
@@ -271,7 +268,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateSafeAreas();
   await initAuth();
 
-  // One click handler for all BUY buttons
+  // BUY handler
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest(".btn-buy");
     if (!btn) return;
@@ -280,10 +277,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.stopPropagation();
 
     const rewardId = btn.dataset.rewardId;
-    if (!rewardId) {
-      alert("Missing data-reward-id on this BUY button.");
-      return;
-    }
+    if (!rewardId) return alert("Missing data-reward-id");
 
     const card = btn.closest(".card");
     const title =
@@ -292,7 +286,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     buyReward(rewardId, title);
   });
 
-  // If initial tab is scan-view, start camera immediately
+  // Start camera if scan view active
   const initialScanView = document.getElementById("scan-view");
   if (initialScanView && initialScanView.classList.contains("active")) {
     startCamera();
