@@ -1,13 +1,15 @@
 import os
-import io
 import sqlite3
 import secrets
 from datetime import datetime
 
 import requests
-import qrcode
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
+
+import io
+import qrcode
+
 
 # ------------------------------------------------------------
 # App setup
@@ -19,42 +21,38 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
 DB_PATH = os.path.join(INSTANCE_DIR, "rubi_trail.db")
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")  # set in Render env
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 
 # ------------------------------------------------------------
-# Telegram helper (send QR image)
+# Telegram helper
 # ------------------------------------------------------------
-def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
+def send_telegram_message(chat_id: str, text: str) -> bool:
     """
-    Sends a QR image to Telegram chat_id using your bot.
-    chat_id = telegram user id
-    qr_payload = string encoded in QR (e.g. redeem URL)
+    Sends a message to a Telegram chat/user.
+    chat_id can be a user_id (DM) or a group/chat id.
     """
     if not TELEGRAM_BOT_TOKEN:
-        print("❌ TELEGRAM_BOT_TOKEN is missing")
+        print("TELEGRAM_BOT_TOKEN is not set -> skipping telegram message")
         return False
 
-    img = qrcode.make(qr_payload)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        r = requests.post(
+        resp = requests.post(
             url,
-            data={"chat_id": chat_id, "caption": caption},
-            files={"photo": ("voucher.png", buf, "image/png")},
-            timeout=15,
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": False,
+            },
+            timeout=10,
         )
-        if r.status_code != 200:
-            print("❌ Telegram sendPhoto error:", r.text)
+        if resp.status_code != 200:
+            print("Telegram send failed:", resp.status_code, resp.text)
             return False
         return True
     except Exception as e:
-        print("❌ Telegram sendPhoto exception:", repr(e))
+        print("Telegram send exception:", repr(e))
         return False
 
 
@@ -129,7 +127,7 @@ def init_db():
         """
     )
 
-    # Seed rewards (IDs must match frontend data-reward-id: 1..3)
+    # Seed rewards (matching your frontend IDs 1..3)
     cur = db.execute("SELECT COUNT(*) AS c FROM rewards")
     if cur.fetchone()["c"] == 0:
         db.executemany(
@@ -164,8 +162,11 @@ def require_user():
     if not token or not token.isdigit():
         return None
     db = get_db()
-    row = db.execute("SELECT * FROM users WHERE id = ?", (int(token),)).fetchone()
-    return dict(row) if row else None
+    cur = db.execute("SELECT * FROM users WHERE id = ?", (int(token),))
+    row = cur.fetchone()
+    if row:
+        return dict(row)
+    return None
 
 
 # ------------------------------------------------------------
@@ -182,7 +183,7 @@ def auth_telegram():
     Expects JSON:
       { "telegram_id": "...", "name": "..." }
     Returns:
-      { "token": "<user_id>", "user": { id,name,coins } }
+      { "token": "<user_id>", "user": { "id":..., "coins":... } }
     """
     data = request.get_json(silent=True) or {}
     telegram_id = str(data.get("telegram_id", "")).strip()
@@ -194,7 +195,9 @@ def auth_telegram():
     db = get_db()
     now = datetime.utcnow().isoformat()
 
-    row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+    # Upsert user
+    cur = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = cur.fetchone()
 
     if row is None:
         db.execute(
@@ -206,7 +209,7 @@ def auth_telegram():
         row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     else:
         row = dict(row)
-        if name and name != row.get("name"):
+        if name and name != row["name"]:
             db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
             db.commit()
             row = dict(db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone())
@@ -215,8 +218,19 @@ def auth_telegram():
         row = dict(row)
 
     return jsonify(
-        {"token": str(row["id"]), "user": {"id": row["id"], "name": row["name"], "coins": row["coins"]}}
+        {
+            "token": str(row["id"]),
+            "user": {"id": row["id"], "name": row["name"], "coins": row["coins"]},
+        }
     )
+
+
+@app.get("/api/me")
+def api_me():
+    user = require_user()
+    if user is None:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"id": user["id"], "name": user["name"], "coins": user["coins"]})
 
 
 @app.post("/api/attractions/scan")
@@ -225,6 +239,8 @@ def scan_attraction():
     Expects JSON:
       { "qrText": "..." }
     Uses Authorization: Bearer <token>
+    Returns:
+      { success, message, newBalance, addedCoins }
     """
     user = require_user()
     if user is None:
@@ -239,6 +255,7 @@ def scan_attraction():
     db = get_db()
     now = datetime.utcnow().isoformat()
 
+    # Prevent double-scan same QR for same user
     try:
         db.execute(
             "INSERT INTO scans(user_id, qr_text, scanned_at) VALUES (?, ?, ?)",
@@ -246,9 +263,15 @@ def scan_attraction():
         )
     except sqlite3.IntegrityError:
         return jsonify(
-            {"success": False, "message": "This QR code was already scanned.", "newBalance": user["coins"], "addedCoins": 0}
+            {
+                "success": False,
+                "message": "This QR code was already scanned.",
+                "newBalance": user["coins"],
+                "addedCoins": 0,
+            }
         )
 
+    # Reward coins (simple rule: +10 per new QR)
     added = 10
     db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (added, user["id"]))
     db.commit()
@@ -256,7 +279,12 @@ def scan_attraction():
     new_coins = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
 
     return jsonify(
-        {"success": True, "message": f"Scan accepted! +{added} coins", "newBalance": new_coins, "addedCoins": added}
+        {
+            "success": True,
+            "message": f"Scan accepted! +{added} coins",
+            "newBalance": new_coins,
+            "addedCoins": added,
+        }
     )
 
 
@@ -264,7 +292,9 @@ def scan_attraction():
 def buy_reward(reward_id: int):
     """
     Uses Authorization: Bearer <token>
-    Creates voucher and sends QR image to user's Telegram.
+    Returns:
+      { success, message, newBalance, voucher: { code, redeemUrl } }
+    Also sends voucher to Telegram if possible.
     """
     user = require_user()
     if user is None:
@@ -277,36 +307,46 @@ def buy_reward(reward_id: int):
 
     reward = dict(reward_row)
 
-    if user["coins"] < reward["price"]:
-        return jsonify({"success": False, "message": "Not enough coins", "newBalance": user["coins"]})
+    # Refresh user coins from DB (important so it’s always up-to-date)
+    user_row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    user_db = dict(user_row) if user_row else user
+
+    if user_db["coins"] < reward["price"]:
+        return jsonify(
+            {
+                "success": False,
+                "message": "Not enough coins",
+                "newBalance": user_db["coins"],
+            }
+        )
 
     # Deduct coins
-    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user["id"]))
+    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user_db["id"]))
 
     # Create voucher
     code = secrets.token_urlsafe(8)
     now = datetime.utcnow().isoformat()
     db.execute(
         "INSERT INTO vouchers(user_id, reward_id, code, created_at) VALUES (?, ?, ?, ?)",
-        (user["id"], reward_id, code, now),
+        (user_db["id"], reward_id, code, now),
     )
     db.commit()
 
-    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
+    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user_db["id"],)).fetchone()["coins"]
 
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/voucher/{code}"
 
-    # ✅ Send QR to Telegram user
-    tg_id = str(user.get("telegram_id", "")).strip()
-    if tg_id:
-        caption = (
-            f"🎫 Voucher created!\n\n"
-            f"{reward['title']}\n"
-            f"Code: {code}\n\n"
-            f"Scan this QR to redeem."
+    # ✅ Send to Telegram (DM to user's telegram_id)
+    telegram_id = str(user_db.get("telegram_id", "")).strip()
+    if telegram_id:
+        msg = (
+            f"🎫 Voucher created!\n"
+            f"Reward: {reward['title']}\n"
+            f"Code: {code}\n"
+            f"Link: {redeem_url}"
         )
-        send_telegram_qr(tg_id, caption, redeem_url)
+        send_telegram_message(telegram_id, msg)
 
     return jsonify(
         {
@@ -362,6 +402,9 @@ def voucher_page(code: str):
     """
 
 
+# ------------------------------------------------------------
+# Local dev / Render fallback (Render mainly uses gunicorn)
+# ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
