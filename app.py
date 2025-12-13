@@ -1,34 +1,109 @@
 import os
-import io
-import sqlite3
 import secrets
 from datetime import datetime
+from io import BytesIO
 
-import requests
 import qrcode
-from flask import Flask, request, jsonify, g
+import requests
+from flask import Flask, request, jsonify, render_template_string
+from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
-# ------------------------------------------------------------
-# App setup
-# ------------------------------------------------------------
+
+# -----------------------
+# BASIC FLASK SETUP
+# -----------------------
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
-DB_PATH = os.path.join(INSTANCE_DIR, "rubi_trail.db")
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DB_PATH = os.path.join(BASE_DIR, "instance", "rubi_trail.db")
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + DB_PATH
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-me-in-production")
+
+db = SQLAlchemy(app)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 
-# ------------------------------------------------------------
-# Telegram helpers
-# ------------------------------------------------------------
+# -----------------------
+# DATABASE MODELS
+# -----------------------
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True)
+    telegram_id = db.Column(db.String(64), unique=True, nullable=False)
+    name = db.Column(db.String(128))
+    coins = db.Column(db.Integer, default=0)
+
+
+class Attraction(db.Model):
+    __tablename__ = "attractions"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    address = db.Column(db.Text)
+    lat = db.Column(db.Float)
+    lon = db.Column(db.Float)
+    reward_coins = db.Column(db.Integer, nullable=False, default=10)
+    qr_code_value = db.Column(db.String(255), unique=True, nullable=False)
+
+
+class Visit(db.Model):
+    __tablename__ = "visits"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    attraction_id = db.Column(db.Integer, db.ForeignKey("attractions.id"), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "attraction_id", name="uq_user_attraction"),
+    )
+
+
+class Service(db.Model):
+    __tablename__ = "services"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+    logo_url = db.Column(db.String(256))
+    description = db.Column(db.String(256))
+
+
+class Reward(db.Model):
+    __tablename__ = "rewards"
+    id = db.Column(db.Integer, primary_key=True)
+    service_id = db.Column(db.Integer, db.ForeignKey("services.id"), nullable=False)
+    title = db.Column(db.String(128), nullable=False)
+    description = db.Column(db.String(256))
+    price_coins = db.Column(db.Integer, nullable=False)
+
+    service = db.relationship("Service", backref="rewards")
+
+
+class Voucher(db.Model):
+    __tablename__ = "vouchers"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    reward_id = db.Column(db.Integer, db.ForeignKey("rewards.id"), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey("services.id"), nullable=False)
+
+    redeem_token = db.Column(db.String(64), unique=True, nullable=False)
+    status = db.Column(db.String(16), nullable=False, default="ACTIVE")  # ACTIVE / REDEEMED
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    redeemed_at = db.Column(db.DateTime)
+
+    user = db.relationship("User", backref="vouchers")
+    reward = db.relationship("Reward", backref="vouchers")
+    service = db.relationship("Service", backref="vouchers")
+
+
+# -----------------------
+# TELEGRAM HELPERS (from your sqlite version)
+# -----------------------
 def send_telegram_message(chat_id: str, text: str) -> bool:
-    """
-    Sends a text message to a Telegram chat/user.
-    """
     if not TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN is not set -> skipping telegram message")
         return False
@@ -37,11 +112,7 @@ def send_telegram_message(chat_id: str, text: str) -> bool:
     try:
         resp = requests.post(
             url,
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": False,
-            },
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": False},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -54,22 +125,16 @@ def send_telegram_message(chat_id: str, text: str) -> bool:
 
 
 def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
-    """
-    Sends a QR code image to Telegram chat/user.
-    qr_payload = string to encode in QR (e.g. redeem URL)
-    """
     if not TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN is not set -> skipping QR send")
         return False
 
-    # Generate QR code
     img = qrcode.make(qr_payload)
-    buf = io.BytesIO()
+    buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-
     try:
         r = requests.post(
             url,
@@ -86,123 +151,79 @@ def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
         return False
 
 
-# ------------------------------------------------------------
-# DB helpers
-# ------------------------------------------------------------
-def get_db():
-    if "db" not in g:
-        os.makedirs(INSTANCE_DIR, exist_ok=True)
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(_err):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
-
-
-def init_db():
-    """Initialize database - called once at startup"""
-    os.makedirs(INSTANCE_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id TEXT UNIQUE NOT NULL,
-            name TEXT,
-            coins INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS scans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            qr_text TEXT NOT NULL,
-            scanned_at TEXT NOT NULL,
-            UNIQUE(user_id, qr_text),
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )
-        """
-    )
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS rewards (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            description TEXT
-        )
-        """
-    )
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vouchers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            reward_id INTEGER NOT NULL,
-            code TEXT UNIQUE NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id),
-            FOREIGN KEY(reward_id) REFERENCES rewards(id)
-        )
-        """
-    )
-
-    # Seed rewards
-    cur = conn.execute("SELECT COUNT(*) AS c FROM rewards")
-    if cur.fetchone()["c"] == 0:
-        conn.executemany(
-            "INSERT INTO rewards(id, title, price, description) VALUES (?, ?, ?, ?)",
-            [
-                (1, "Restaurant : Tavaduri", 20, "20% CASHBACK (MAX 40 LARI)"),
-                (2, "Cafe : Art House", 15, "15% CASHBACK (MAX 30 LARI)"),
-                (3, "Museum : Modern Art", 10, "FREE ENTRY + 10% CASHBACK"),
-            ],
-        )
-
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized")
-
-
-# Initialize database once at startup
-init_db()
-
-
-# ------------------------------------------------------------
-# Auth helpers
-# ------------------------------------------------------------
-def get_bearer_token():
+# -----------------------
+# AUTH (matches your frontend: Bearer <user_id>)
+# -----------------------
+def get_current_user():
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return auth.replace("Bearer ", "", 1).strip()
+        token = auth.split(" ", 1)[1].strip()
+        if token.isdigit():
+            return User.query.get(int(token))
     return None
 
 
-def require_user():
-    token = get_bearer_token()
-    if not token or not token.isdigit():
-        return None
-    db = get_db()
-    row = db.execute("SELECT * FROM users WHERE id = ?", (int(token),)).fetchone()
-    return dict(row) if row else None
+# -----------------------
+# OPTIONAL: init/seed (your create_demo_data, but safer)
+# -----------------------
+def create_demo_data():
+    db.drop_all()
+    db.create_all()
+
+    # Demo user (change telegram_id for YOUR account if you want to test DM)
+    user = User(telegram_id="6732377993", name="Demo User", coins=0)
+    db.session.add(user)
+
+    # Attractions
+    a1 = Attraction(
+        title="Ali and Nino",
+        description="Batumi Boulevard attraction.",
+        address="Batumi Boulevard",
+        lat=41.6539,
+        lon=41.6360,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit27",
+    )
+    a2 = Attraction(
+        title="Alphabetic Tower",
+        description="Batumi Boulevard attraction.",
+        address="Batumi Boulevard",
+        lat=41.656088567441216,
+        lon=41.639600470801206,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit90",
+    )
+    a3 = Attraction(
+        title="GITA TouristHack 2025",
+        description="Tech Park Batumi attraction.",
+        address="Tech Park Batumi",
+        lat=41.62386745993197,
+        lon=41.62490440795824,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit72",
+    )
+    db.session.add_all([a1, a2, a3])
+
+    # Services
+    s1 = Service(name="Tavaduri", logo_url="", description="Cozy restaurant.")
+    s2 = Service(name="Art House Cafe", logo_url="", description="Cafe.")
+    s3 = Service(name="Museum of Arts", logo_url="", description="Museum.")
+    db.session.add_all([s1, s2, s3])
+    db.session.flush()
+
+    # Rewards
+    r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=20)
+    r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=15)
+    r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=10)
+    db.session.add_all([r1, r2, r3])
+
+    db.session.commit()
+    print("✅ Demo data created. Demo User ID:", user.id)
 
 
-# ------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------
+# -----------------------
+# ROUTES
+# -----------------------
 @app.get("/")
 def home():
     return jsonify({"ok": True, "service": "rubi-trail-backend"})
@@ -213,288 +234,234 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.get("/init-db")
+def init_db_route():
+    create_demo_data()
+    return "Database initialized with demo data."
+
+
 @app.post("/auth/telegram")
 def auth_telegram():
-    """
-    Expects JSON:
-      { "telegram_id": "...", "name": "..." }
-    Returns:
-      { "token": "<user_id>", "user": { "id":..., "coins":... } }
-    """
     data = request.get_json(silent=True) or {}
     telegram_id = str(data.get("telegram_id", "")).strip()
     name = str(data.get("name", "")).strip()
 
     if not telegram_id:
-        return jsonify({"error": "telegram_id is required"}), 400
+        return jsonify({"error": "telegram_id required"}), 400
 
-    db = get_db()
-    now = datetime.utcnow().isoformat()
-
-    row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-
-    if row is None:
-        db.execute(
-            "INSERT INTO users(telegram_id, name, coins, created_at) VALUES (?, ?, ?, ?)",
-            (telegram_id, name or "User", 0, now),
-        )
-        db.commit()
-        user_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = User.query.filter_by(telegram_id=telegram_id).first()
+    if not user:
+        user = User(telegram_id=telegram_id, name=name or "User", coins=0)
+        db.session.add(user)
+        db.session.commit()
     else:
-        row = dict(row)
-        if name and name != row["name"]:
-            db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
-            db.commit()
-            row = dict(db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone())
+        if name and name != (user.name or ""):
+            user.name = name
+            db.session.commit()
 
-    if not isinstance(row, dict):
-        row = dict(row)
-
-    return jsonify(
-        {
-            "token": str(row["id"]),
-            "user": {"id": row["id"], "name": row["name"], "coins": row["coins"]},
-        }
-    )
+    return jsonify({"token": str(user.id), "user": {"id": user.id, "name": user.name, "coins": user.coins}})
 
 
 @app.get("/api/me")
 def api_me():
-    """Get current user info"""
-    user = require_user()
-    if user is None:
+    user = get_current_user()
+    if not user:
         return jsonify({"error": "unauthorized"}), 401
-    return jsonify({"id": user["id"], "name": user["name"], "coins": user["coins"]})
+    return jsonify({"id": user.id, "name": user.name, "coins": user.coins})
 
 
 @app.post("/api/attractions/scan")
 def scan_attraction():
-    """
-    Expects JSON:
-      { "qrText": "..." }
-    Uses Authorization: Bearer <token>
-    Returns:
-      { success, message, newBalance, addedCoins }
-    """
-    user = require_user()
-    if user is None:
+    user = get_current_user()
+    if not user:
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
     data = request.get_json(silent=True) or {}
-    qr_text = str(data.get("qrText", "")).strip()
 
-    if not qr_text:
-        return jsonify({"success": False, "message": "qrText is required"}), 400
+    # ✅ Accept BOTH keys so your frontend + old code both work
+    qr_value = (data.get("qrText") or data.get("code") or "").strip()
+    if not qr_value:
+        return jsonify({"success": False, "message": "No QR code provided"}), 400
 
-    db = get_db()
-    now = datetime.utcnow().isoformat()
+    attraction = Attraction.query.filter_by(qr_code_value=qr_value).first()
+    if not attraction:
+        return jsonify({"success": False, "message": "Invalid QR code"}), 404
 
-    # Prevent double-scan same QR for same user
-    try:
-        db.execute(
-            "INSERT INTO scans(user_id, qr_text, scanned_at) VALUES (?, ?, ?)",
-            (user["id"], qr_text, now),
-        )
-    except sqlite3.IntegrityError:
-        return jsonify(
+    existing = Visit.query.filter_by(user_id=user.id, attraction_id=attraction.id).first()
+    if existing:
+        return jsonify({"success": False, "message": "You already claimed this spot.", "newBalance": user.coins, "addedCoins": 0})
+
+    user.coins += attraction.reward_coins
+    db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "message": f"You discovered {attraction.title}!",
+        "addedCoins": attraction.reward_coins,
+        "newBalance": user.coins
+    })
+
+
+@app.get("/api/rewards")
+def list_rewards():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    rewards = Reward.query.all()
+    return jsonify({
+        "userCoins": user.coins,
+        "rewards": [
             {
-                "success": False,
-                "message": "This QR code was already scanned.",
-                "newBalance": user["coins"],
-                "addedCoins": 0,
+                "id": r.id,
+                "title": r.title,
+                "description": r.description,
+                "priceCoins": r.price_coins,
+                "service": {
+                    "id": r.service.id,
+                    "name": r.service.name,
+                    "logoUrl": r.service.logo_url,
+                    "description": r.service.description,
+                },
             }
-        )
-
-    # Reward coins (+10 per new QR)
-    added = 10
-    db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (added, user["id"]))
-    db.commit()
-
-    new_coins = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
-
-    return jsonify(
-        {
-            "success": True,
-            "message": f"Scan accepted! +{added} coins",
-            "newBalance": new_coins,
-            "addedCoins": added,
-        }
-    )
+            for r in rewards
+        ],
+    })
 
 
 @app.post("/api/rewards/<int:reward_id>/buy")
 def buy_reward(reward_id: int):
-    """
-    Uses Authorization: Bearer <token>
-    Creates voucher and sends QR code image to user's Telegram.
-    Returns:
-      { success, message, newBalance, voucher: { code, redeemUrl } }
-    """
-    user = require_user()
-    if user is None:
+    user = get_current_user()
+    if not user:
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
-    db = get_db()
-    
-    # Get reward details
-    reward_row = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
-    if reward_row is None:
+    reward = Reward.query.get(reward_id)
+    if not reward:
         return jsonify({"success": False, "message": "Reward not found"}), 404
 
-    reward = dict(reward_row)
+    if user.coins < reward.price_coins:
+        return jsonify({"success": False, "message": "Not enough coins.", "newBalance": user.coins}), 400
 
-    # IMPORTANT: Always get fresh user data from DB before checking balance
-    user_row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-    if not user_row:
-        return jsonify({"success": False, "message": "User not found"}), 404
-    
-    user = dict(user_row)
-
-    # Check if user has enough coins
-    if user["coins"] < reward["price"]:
-        return jsonify(
-            {
-                "success": False,
-                "message": f"Not enough coins. You have {user['coins']}, need {reward['price']}.",
-                "newBalance": user["coins"],
-            }
-        )
-
-    # Deduct coins
-    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user["id"]))
-
-    # Create voucher
-    code = secrets.token_urlsafe(8)
-    now = datetime.utcnow().isoformat()
-    db.execute(
-        "INSERT INTO vouchers(user_id, reward_id, code, created_at) VALUES (?, ?, ?, ?)",
-        (user["id"], reward_id, code, now),
+    # Deduct + create voucher
+    user.coins -= reward.price_coins
+    token = secrets.token_urlsafe(16)
+    voucher = Voucher(
+        user_id=user.id,
+        reward_id=reward.id,
+        service_id=reward.service_id,
+        redeem_token=token,
+        status="ACTIVE",
     )
-    db.commit()
+    db.session.add(voucher)
+    db.session.commit()
 
-    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
-
+    # ✅ Render-safe redeem URL (no localhost)
     base_url = request.host_url.rstrip("/")
-    redeem_url = f"{base_url}/voucher/{code}"
+    redeem_url = f"{base_url}/v/{token}"
 
-    # ✅ Send QR code image to Telegram
-    telegram_id = str(user.get("telegram_id", "")).strip()
-    if telegram_id:
-        caption = (
-            f"🎫 Voucher Created!\n\n"
-            f"{reward['title']}\n"
-            f"Code: {code}\n\n"
-            f"Scan this QR code to redeem your voucher."
-        )
-        send_telegram_qr(telegram_id, caption, redeem_url)
+    # ✅ Send QR + also send text fallback
+    caption = f"🎫 Your Rubi Trail voucher\n{reward.title}\n\nOpen: {redeem_url}"
+    sent_qr = send_telegram_qr(user.telegram_id, caption, redeem_url)
+    if not sent_qr:
+        send_telegram_message(user.telegram_id, caption)
 
-    return jsonify(
-        {
-            "success": True,
-            "message": "Purchase successful! Check your Telegram for the QR code.",
-            "newBalance": new_balance,
-            "voucher": {"code": code, "redeemUrl": redeem_url},
+    return jsonify({
+        "success": True,
+        "message": "Voucher created.",
+        "newBalance": user.coins,
+        "voucher": {
+            "id": voucher.id,
+            "redeemUrl": redeem_url,
+            "rewardTitle": reward.title,
+            "serviceName": reward.service.name,
         }
+    })
+
+
+# ---- PUBLIC VOUCHER PAGE (/v/<token>) ----
+VOUCHER_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rubi Voucher</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f4f5f7;">
+  <div style="background:white;padding:24px;border-radius:16px;max-width:420px;width:100%;text-align:center;">
+    {% if invalid %}
+      <h2>Voucher invalid or already redeemed.</h2>
+    {% else %}
+      <h2>{{ service.name }}</h2>
+      <h3>{{ reward.title }}</h3>
+      <p>{{ reward.description }}</p>
+      <p><b>Status:</b> {{ voucher.status }}</p>
+      <button id="redeem-btn" style="padding:12px 24px;border-radius:999px;border:none;background:#e53935;color:white;font-weight:700;cursor:pointer;">
+        Redeem now
+      </button>
+      <p id="msg"></p>
+      <script>
+        const token = "{{ token }}";
+        const btn = document.getElementById("redeem-btn");
+        const msg = document.getElementById("msg");
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          btn.textContent = "Processing...";
+          const res = await fetch("/api/vouchers/redeem", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ token })
+          });
+          const data = await res.json();
+          msg.textContent = data.success ? "Redeemed ✅" : (data.message || "Invalid");
+          btn.style.display = "none";
+        });
+      </script>
+    {% endif %}
+  </div>
+</body>
+</html>
+"""
+
+
+@app.get("/v/<token>")
+def voucher_page(token: str):
+    v = Voucher.query.filter_by(redeem_token=token).first()
+    if not v or v.status != "ACTIVE":
+        return render_template_string(VOUCHER_TEMPLATE, invalid=True)
+
+    return render_template_string(
+        VOUCHER_TEMPLATE,
+        invalid=False,
+        token=token,
+        voucher=v,
+        reward=v.reward,
+        service=v.service,
     )
 
 
-@app.get("/voucher/<code>")
-def voucher_page(code: str):
-    """Public voucher redemption page"""
-    db = get_db()
-    v = db.execute(
-        """
-        SELECT v.code, v.created_at, r.title, r.description
-        FROM vouchers v
-        JOIN rewards r ON r.id = v.reward_id
-        WHERE v.code = ?
-        """,
-        (code,),
-    ).fetchone()
+@app.post("/api/vouchers/redeem")
+def redeem_voucher():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify({"success": False, "message": "Missing token"}), 400
 
-    if v is None:
-        return ("Voucher not found", 404)
+    v = Voucher.query.filter_by(redeem_token=token).first()
+    if not v:
+        return jsonify({"success": False, "message": "Voucher not found"}), 404
+    if v.status != "ACTIVE":
+        return jsonify({"success": False, "message": "Voucher already redeemed"}), 400
 
-    v = dict(v)
-
-    return f"""
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width,initial-scale=1" />
-      <title>Voucher - {v["title"]}</title>
-      <style>
-        body {{ 
-          font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; 
-          padding: 24px; 
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          min-height: 100vh;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }}
-        .card {{ 
-          max-width: 520px; 
-          background: white;
-          border-radius: 20px; 
-          padding: 32px;
-          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }}
-        h2 {{ 
-          margin: 0 0 16px 0; 
-          color: #667eea;
-          font-size: 28px;
-        }}
-        .code {{ 
-          font-size: 32px; 
-          font-weight: 800; 
-          letter-spacing: 2px;
-          color: #333;
-          background: #f0f0f0;
-          padding: 16px;
-          border-radius: 12px;
-          text-align: center;
-          margin: 20px 0;
-        }}
-        .description {{
-          font-size: 18px;
-          color: #666;
-          margin: 16px 0;
-        }}
-        .muted {{ 
-          color: #999; 
-          font-size: 14px;
-        }}
-        .badge {{
-          display: inline-block;
-          background: #667eea;
-          color: white;
-          padding: 8px 16px;
-          border-radius: 20px;
-          font-size: 14px;
-          font-weight: 600;
-          margin-top: 20px;
-        }}
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <h2>🎫 {v["title"]}</h2>
-        <p class="description">{v["description"] or ""}</p>
-        <div class="code">{v["code"]}</div>
-        <p class="muted">Created: {v["created_at"]}</p>
-        <div class="badge">Valid Voucher</div>
-      </div>
-    </body>
-    </html>
-    """
+    v.status = "REDEEMED"
+    v.redeemed_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"success": True, "message": "Voucher redeemed successfully"})
 
 
-# ------------------------------------------------------------
-# Run (for local dev)
-# ------------------------------------------------------------
+# -----------------------
+# MAIN ENTRY POINT
+# -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
