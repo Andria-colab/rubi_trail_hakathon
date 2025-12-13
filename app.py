@@ -1,9 +1,11 @@
 import os
+import io
 import sqlite3
 import secrets
 from datetime import datetime
 
 import requests
+import qrcode
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
@@ -21,12 +23,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 
 # ------------------------------------------------------------
-# Telegram helper
+# Telegram helpers
 # ------------------------------------------------------------
 def send_telegram_message(chat_id: str, text: str) -> bool:
     """
-    Sends a message to a Telegram chat/user.
-    chat_id can be a user_id (DM) or a group/chat id.
+    Sends a text message to a Telegram chat/user.
     """
     if not TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN is not set -> skipping telegram message")
@@ -52,6 +53,39 @@ def send_telegram_message(chat_id: str, text: str) -> bool:
         return False
 
 
+def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
+    """
+    Sends a QR code image to Telegram chat/user.
+    qr_payload = string to encode in QR (e.g. redeem URL)
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN is not set -> skipping QR send")
+        return False
+
+    # Generate QR code
+    img = qrcode.make(qr_payload)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+
+    try:
+        r = requests.post(
+            url,
+            data={"chat_id": chat_id, "caption": caption},
+            files={"photo": ("voucher.png", buf, "image/png")},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print("Telegram sendPhoto error:", r.text)
+            return False
+        return True
+    except Exception as e:
+        print("Telegram sendPhoto exception:", repr(e))
+        return False
+
+
 # ------------------------------------------------------------
 # DB helpers
 # ------------------------------------------------------------
@@ -71,9 +105,12 @@ def close_db(_err):
 
 
 def init_db():
-    db = get_db()
+    """Initialize database - called once at startup"""
+    os.makedirs(INSTANCE_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
 
-    db.execute(
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +122,7 @@ def init_db():
         """
     )
 
-    db.execute(
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +135,7 @@ def init_db():
         """
     )
 
-    db.execute(
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS rewards (
             id INTEGER PRIMARY KEY,
@@ -109,7 +146,7 @@ def init_db():
         """
     )
 
-    db.execute(
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS vouchers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,10 +160,10 @@ def init_db():
         """
     )
 
-    # Seed rewards (matching your frontend IDs 1..3)
-    cur = db.execute("SELECT COUNT(*) AS c FROM rewards")
+    # Seed rewards
+    cur = conn.execute("SELECT COUNT(*) AS c FROM rewards")
     if cur.fetchone()["c"] == 0:
-        db.executemany(
+        conn.executemany(
             "INSERT INTO rewards(id, title, price, description) VALUES (?, ?, ?, ?)",
             [
                 (1, "Restaurant : Tavaduri", 20, "20% CASHBACK (MAX 40 LARI)"),
@@ -135,12 +172,13 @@ def init_db():
             ],
         )
 
-    db.commit()
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized")
 
 
-@app.before_request
-def _before():
-    init_db()
+# Initialize database once at startup
+init_db()
 
 
 # ------------------------------------------------------------
@@ -158,11 +196,8 @@ def require_user():
     if not token or not token.isdigit():
         return None
     db = get_db()
-    cur = db.execute("SELECT * FROM users WHERE id = ?", (int(token),))
-    row = cur.fetchone()
-    if row:
-        return dict(row)
-    return None
+    row = db.execute("SELECT * FROM users WHERE id = ?", (int(token),)).fetchone()
+    return dict(row) if row else None
 
 
 # ------------------------------------------------------------
@@ -171,6 +206,11 @@ def require_user():
 @app.get("/")
 def home():
     return jsonify({"ok": True, "service": "rubi-trail-backend"})
+
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
 
 
 @app.post("/auth/telegram")
@@ -191,9 +231,7 @@ def auth_telegram():
     db = get_db()
     now = datetime.utcnow().isoformat()
 
-    # Upsert user
-    cur = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = cur.fetchone()
+    row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
 
     if row is None:
         db.execute(
@@ -223,6 +261,7 @@ def auth_telegram():
 
 @app.get("/api/me")
 def api_me():
+    """Get current user info"""
     user = require_user()
     if user is None:
         return jsonify({"error": "unauthorized"}), 401
@@ -267,7 +306,7 @@ def scan_attraction():
             }
         )
 
-    # Reward coins (simple rule: +10 per new QR)
+    # Reward coins (+10 per new QR)
     added = 10
     db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (added, user["id"]))
     db.commit()
@@ -286,79 +325,78 @@ def scan_attraction():
 
 @app.post("/api/rewards/<int:reward_id>/buy")
 def buy_reward(reward_id: int):
+    """
+    Uses Authorization: Bearer <token>
+    Creates voucher and sends QR code image to user's Telegram.
+    Returns:
+      { success, message, newBalance, voucher: { code, redeemUrl } }
+    """
     user = require_user()
     if user is None:
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
     db = get_db()
-
-    reward_row = db.execute(
-        "SELECT * FROM rewards WHERE id = ?",
-        (reward_id,),
-    ).fetchone()
-
+    reward_row = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
     if reward_row is None:
         return jsonify({"success": False, "message": "Reward not found"}), 404
 
     reward = dict(reward_row)
 
-    user_row = db.execute(
-        "SELECT * FROM users WHERE telegram_id = ?",
-        (user["telegram_id"],),
-    ).fetchone()
+    # Refresh user from DB to get latest coin balance
+    user_row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    if user_row:
+        user = dict(user_row)
 
-    if user_row is None:
-        return jsonify({"success": False, "message": "User not found"}), 404
+    if user["coins"] < reward["price"]:
+        return jsonify(
+            {
+                "success": False,
+                "message": "Not enough coins",
+                "newBalance": user["coins"],
+            }
+        )
 
-    user_db = dict(user_row)
+    # Deduct coins
+    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user["id"]))
 
-    if user_db["coins"] < reward["price"]:
-        return jsonify({
-            "success": False,
-            "message": "Not enough coins",
-            "newBalance": user_db["coins"]
-        })
-
-    code = secrets.token_urlsafe(10)
+    # Create voucher
+    code = secrets.token_urlsafe(8)
     now = datetime.utcnow().isoformat()
-
     db.execute(
-        "UPDATE users SET coins = coins - ? WHERE telegram_id = ?",
-        (reward["price"], user_db["telegram_id"]),
+        "INSERT INTO vouchers(user_id, reward_id, code, created_at) VALUES (?, ?, ?, ?)",
+        (user["id"], reward_id, code, now),
     )
-
-    db.execute(
-        """
-        INSERT INTO vouchers (telegram_id, reward_id, code, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (user_db["telegram_id"], reward_id, code, now),
-    )
-
     db.commit()
 
-    new_balance = db.execute(
-        "SELECT coins FROM users WHERE telegram_id = ?",
-        (user_db["telegram_id"],),
-    ).fetchone()["coins"]
+    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
 
-    redeem_url = f"{request.host_url.rstrip('/')}/voucher/{code}"
+    base_url = request.host_url.rstrip("/")
+    redeem_url = f"{base_url}/voucher/{code}"
 
-    return jsonify({
-        "success": True,
-        "message": "Purchase successful!",
-        "newBalance": new_balance,
-        "voucher": {
-            "code": code,
-            "redeemUrl": redeem_url,
-        },
-    })
+    # ✅ Send QR code image to Telegram
+    telegram_id = str(user.get("telegram_id", "")).strip()
+    if telegram_id:
+        caption = (
+            f"🎫 Voucher Created!\n\n"
+            f"{reward['title']}\n"
+            f"Code: {code}\n\n"
+            f"Scan this QR code to redeem your voucher."
+        )
+        send_telegram_qr(telegram_id, caption, redeem_url)
 
-
+    return jsonify(
+        {
+            "success": True,
+            "message": "Purchase successful! Check your Telegram for the QR code.",
+            "newBalance": new_balance,
+            "voucher": {"code": code, "redeemUrl": redeem_url},
+        }
+    )
 
 
 @app.get("/voucher/<code>")
 def voucher_page(code: str):
+    """Public voucher redemption page"""
     db = get_db()
     v = db.execute(
         """
@@ -381,20 +419,68 @@ def voucher_page(code: str):
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
-      <title>Voucher</title>
+      <title>Voucher - {v["title"]}</title>
       <style>
-        body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 24px; }}
-        .card {{ max-width: 520px; margin: 0 auto; border: 1px solid #ddd; border-radius: 14px; padding: 18px; }}
-        .code {{ font-size: 22px; font-weight: 800; letter-spacing: 1px; }}
-        .muted {{ color: #666; }}
+        body {{ 
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; 
+          padding: 24px; 
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }}
+        .card {{ 
+          max-width: 520px; 
+          background: white;
+          border-radius: 20px; 
+          padding: 32px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }}
+        h2 {{ 
+          margin: 0 0 16px 0; 
+          color: #667eea;
+          font-size: 28px;
+        }}
+        .code {{ 
+          font-size: 32px; 
+          font-weight: 800; 
+          letter-spacing: 2px;
+          color: #333;
+          background: #f0f0f0;
+          padding: 16px;
+          border-radius: 12px;
+          text-align: center;
+          margin: 20px 0;
+        }}
+        .description {{
+          font-size: 18px;
+          color: #666;
+          margin: 16px 0;
+        }}
+        .muted {{ 
+          color: #999; 
+          font-size: 14px;
+        }}
+        .badge {{
+          display: inline-block;
+          background: #667eea;
+          color: white;
+          padding: 8px 16px;
+          border-radius: 20px;
+          font-size: 14px;
+          font-weight: 600;
+          margin-top: 20px;
+        }}
       </style>
     </head>
     <body>
       <div class="card">
-        <h2>{v["title"]}</h2>
-        <p class="muted">{v["description"] or ""}</p>
-        <p class="code">{v["code"]}</p>
+        <h2>🎫 {v["title"]}</h2>
+        <p class="description">{v["description"] or ""}</p>
+        <div class="code">{v["code"]}</div>
         <p class="muted">Created: {v["created_at"]}</p>
+        <div class="badge">Valid Voucher</div>
       </div>
     </body>
     </html>
@@ -402,7 +488,7 @@ def voucher_page(code: str):
 
 
 # ------------------------------------------------------------
-# Local dev / Render fallback (Render mainly uses gunicorn)
+# Run (for local dev)
 # ------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
