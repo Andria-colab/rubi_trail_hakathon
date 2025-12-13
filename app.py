@@ -9,6 +9,17 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
+from flask import send_from_directory
+
+@app.get("/")
+def serve_frontend():
+    return send_from_directory("frontend", "index.html")
+
+@app.get("/frontend/<path:filename>")
+def serve_static(filename):
+    return send_from_directory("frontend", filename)
+
+
 
 # -----------------------
 # BASIC FLASK SETUP
