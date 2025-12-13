@@ -4,10 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Rubi Trail</title>
+
+    <!-- Correct path inside frontend folder -->
     <link rel="stylesheet" href="style.css">
-    <script src="script.js"></script>
-
-
 </head>
 
 <body>
@@ -16,20 +15,21 @@
         <div class="spinner"></div>
         <div>Loading...</div>
     </div>
-<header>
-    <div class="app-title">
-        <img src="../Images/logo_PNG.png" class="app-logo">
-        Rubi Trail
-    </div>
 
-    <div class="coin-balance">
-        124 <div class="coin-icon"></div>
-    </div>
-</header>
+    <header>
+        <div class="app-title">
+            <img src="./Images/logo_PNG.png" class="app-logo">
+            Rubi Trail
+        </div>
 
+        <div class="coin-balance">
+            124 <div class="coin-icon"></div>
+        </div>
+    </header>
 
     <main>
 
+        <!-- SCAN VIEW -->
         <section id="scan-view" class="view-section active">
             <video id="camera-stream" autoplay playsinline muted></video>
             
@@ -39,6 +39,7 @@
             </div>
         </section>
 
+        <!-- DISCOVER VIEW -->
         <section id="discover-view" class="view-section">
             <div class="card">
                 <img src="https://images.unsplash.com/photo-1550543503-68d2a45d0705?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Ali and Nino">
@@ -67,7 +68,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <div class="card">
                 <img src="https://images.unsplash.com/photo-1580052614386-5f1d5a1d0c6e?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Maiden Tower">
                 <div class="card-content">
@@ -83,6 +84,7 @@
             </div>
         </section>
 
+        <!-- REWARDS VIEW -->
         <section id="rewards-view" class="view-section">
             <div class="card">
                 <img src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Restaurant">
@@ -124,10 +126,11 @@
             </div>
         </section>
 
+        <!-- MAP VIEW -->
         <section id="map-view" class="view-section">
             <div class="map-placeholder">
                 <h2>Interactive Map</h2>
-                <p>Explore city attractions, rewards, and QR code locations on an interactive map.</p>
+                <p>Explore city attractions, rewards, and QR locations on an interactive map.</p>
                 <p style="margin-top: 20px; color: var(--accent-red); font-weight: 700;">Map integration coming soon!</p>
             </div>
         </section>
@@ -135,26 +138,17 @@
     </main>
 
     <nav>
-        <a href="#" class="nav-item active" onclick="switchTab('scan-view', this)">
-            <span class="nav-icon">📷</span>
-            Scan
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('discover-view', this)">
-            <span class="nav-icon">🔍</span>
-            Discover
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('rewards-view', this)">
-            <span class="nav-icon">🏆</span>
-            Rewards
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('map-view', this)">
-            <span class="nav-icon">🗺️</span>
-            Map
-        </a>
+        <a href="#" class="nav-item active" onclick="switchTab('scan-view', this)">📷 Scan</a>
+        <a href="#" class="nav-item" onclick="switchTab('discover-view', this)">🔍 Discover</a>
+        <a href="#" class="nav-item" onclick="switchTab('rewards-view', this)">🏆 Rewards</a>
+        <a href="#" class="nav-item" onclick="switchTab('map-view', this)">🗺️ Map</a>
     </nav>
 
+    <!-- QR Library -->
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-    <script src="../frontend/script.js"></script>
+
+    <!-- Your JS file (correct path) -->
+    <script src="script.js"></script>
 
 </body>
 </html>
