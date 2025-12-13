@@ -9,41 +9,44 @@ async function initAuth() {
   try {
     const tg = window.Telegram?.WebApp;
 
-    let userId = null;
-    let userName = null;
+    let telegramId = null;
+    let displayName = "Web User";
 
-    if (tg) {
-      // Telegram Mini App
+    if (tg?.initDataUnsafe?.user?.id) {
+      // ✅ Telegram mini app
       tg.ready();
-
-      const tgUser = tg.initDataUnsafe?.user;
-      if (!tgUser?.id) {
-        alert("Telegram user not available.");
-        return;
-      }
-
-      userId = String(tgUser.id);
-      userName = tgUser.first_name || tgUser.username || "Telegram User";
+      telegramId = String(tg.initDataUnsafe.user.id);
+      displayName =
+        tg.initDataUnsafe.user.first_name ||
+        tg.initDataUnsafe.user.username ||
+        "Telegram User";
     } else {
-      // ✅ Normal browser fallback (so it opens outside Telegram)
-      const stored = localStorage.getItem("web_user_id");
-      if (stored && /^\d+$/.test(stored)) {
-        userId = stored;
-      } else {
-        // backend requires numeric telegram_id
-        userId = String(Math.floor(1_000_000_000 + Math.random() * 9_000_000_000));
-        localStorage.setItem("web_user_id", userId);
-      }
+      // ✅ Fallback: open in normal browser (Render/Vercel)
+      telegramId = localStorage.getItem("telegram_id_fallback");
+      displayName = localStorage.getItem("telegram_name_fallback") || "Web User";
 
-      userName = localStorage.getItem("web_user_name") || "Web User";
+      if (!telegramId) {
+        telegramId = prompt(
+          "You opened this outside Telegram.\n\nEnter your TELEGRAM USER ID to continue (numbers only)."
+        );
+        if (!telegramId || !/^\d+$/.test(telegramId)) {
+          alert("No valid Telegram ID provided. App will run in read-only mode.");
+          return;
+        }
+        const nameInput = prompt("Optional: your name (for display)");
+        if (nameInput) displayName = nameInput;
+
+        localStorage.setItem("telegram_id_fallback", telegramId);
+        localStorage.setItem("telegram_name_fallback", displayName);
+      }
     }
 
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        telegram_id: userId,
-        name: userName,
+        telegram_id: String(telegramId),
+        name: displayName,
       }),
     });
 
@@ -55,10 +58,7 @@ async function initAuth() {
       return;
     }
 
-    // ✅ token is telegram_id now
     authToken = String(data.token);
-    console.log("✅ Auth token:", authToken);
-
     updateCoins(data.user?.coins ?? 0);
   } catch (err) {
     console.error("Auth failed:", err);
@@ -76,7 +76,7 @@ function updateCoins(coins) {
 function getAuthHeaders() {
   return {
     "Content-Type": "application/json",
-    "Authorization": "Bearer " + authToken,
+    Authorization: "Bearer " + authToken,
   };
 }
 
@@ -92,10 +92,14 @@ function switchTab(viewId, navElement) {
   showLoading();
 
   setTimeout(() => {
-    document.querySelectorAll(".view-section").forEach(v => v.classList.remove("active"));
+    document
+      .querySelectorAll(".view-section")
+      .forEach((v) => v.classList.remove("active"));
     document.getElementById(viewId)?.classList.add("active");
 
-    document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+    document
+      .querySelectorAll(".nav-item")
+      .forEach((n) => n.classList.remove("active"));
     navElement.classList.add("active");
 
     if (viewId === "scan-view") startCamera();
@@ -143,7 +147,7 @@ async function startCamera() {
 function stopCamera() {
   scanning = false;
   if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
+    localStream.getTracks().forEach((t) => t.stop());
     localStream = null;
   }
   if (videoElement) videoElement.srcObject = null;
@@ -165,7 +169,6 @@ function scanLoop() {
       const code = jsQR(imageData.data, w, h, { inversionAttempts: "dontInvert" });
 
       if (code?.data) {
-        console.log("✅ QR payload:", code.data);
         scanning = false;
         stopCamera();
         handleQRCode(code.data);
@@ -185,9 +188,6 @@ async function handleQRCode(decodedText) {
     alert("Not authenticated yet. Reload.");
     return;
   }
-
-  console.log("AUTH TOKEN:", authToken);
-  console.log("SENDING QR:", decodedText);
 
   showLoading();
   try {
@@ -247,14 +247,16 @@ async function buyReward(rewardId, titleForAlert) {
     if (data.success) {
       updateCoins(data.newBalance);
 
-      // ✅ Open voucher link in Telegram OR normal browser
-      if (data.voucher?.redeemUrl) {
-        const tg = window.Telegram?.WebApp;
-        if (tg?.openLink) tg.openLink(data.voucher.redeemUrl);
-        else window.open(data.voucher.redeemUrl, "_blank");
-      }
+      // ✅ DO NOT open voucher automatically (you wanted it in chat)
+      const sent = data.telegramSent === true;
 
-      alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram chat ✅`);
+      if (sent) {
+        alert(`✅ Bought: ${titleForAlert}\n📩 Voucher sent in Telegram chat!`);
+      } else {
+        alert(
+          `✅ Bought: ${titleForAlert}\n⚠️ Could not DM you on Telegram.\nOpen the bot and press START once, then buy again.\n\nVoucher link:\n${data.voucher?.redeemUrl || ""}`
+        );
+      }
     } else {
       alert(`❌ ${data.message || "Could not buy reward."}`);
     }

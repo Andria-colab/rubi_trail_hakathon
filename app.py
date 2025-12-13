@@ -313,23 +313,30 @@ def buy_reward(reward_id: int):
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/voucher/{code}"
 
-    # Send QR voucher to the SAME telegram user who bought it
     caption = (
         f"🎫 Voucher created!\n"
         f"{reward['title']}\n"
         f"Code: {code}\n"
         f"Open: {redeem_url}"
     )
-    send_telegram_qr(user_db["telegram_id"], redeem_url, caption)
+
+    # 1) Try sending QR image
+    sent = send_telegram_qr(user_db["telegram_id"], redeem_url, caption)
+
+    # 2) Fallback: if photo failed, try plain text
+    if not sent:
+        sent = send_telegram_text(user_db["telegram_id"], caption)
 
     return jsonify(
         {
             "success": True,
             "message": "Purchase successful!",
             "newBalance": new_balance,
+            "telegramSent": bool(sent),
             "voucher": {"code": code, "redeemUrl": redeem_url},
         }
     )
+
 
 @app.get("/voucher/<code>")
 def voucher_page(code: str):
