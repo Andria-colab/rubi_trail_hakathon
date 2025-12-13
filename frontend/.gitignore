@@ -1,0 +1,26 @@
+# === ENVIRONMENTS ===
+.venv/
+venv/
+env/
+
+# === PYTHON CACHE ===
+__pycache__/
+*.pyc
+*.pyo
+
+# === EDITOR / OS FILES ===
+.vscode/
+.DS_Store
+
+# === NODE/FRONTEND ===
+node_modules/
+
+# === LOGS ===
+*.log
+
+# === BUILD ARTIFACTS ===
+dist/
+build/
+
+# === RENDER / VERCEL ===
+.vercel/
