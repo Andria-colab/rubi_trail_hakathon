@@ -24,3 +24,7 @@ build/
 
 # === RENDER / VERCEL ===
 .vercel/
+
+
+instance/
+*.db

@@ -123,7 +123,10 @@ def require_user():
         return None
     db = get_db()
     cur = db.execute("SELECT * FROM users WHERE id = ?", (int(token),))
-    return cur.fetchone()
+    row = cur.fetchone()
+    if row:
+        return dict(row)
+    return None
 
 
 # ------------------------------------------------------------
@@ -166,10 +169,15 @@ def auth_telegram():
         row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     else:
         # keep existing coins, update name if provided
+        row = dict(row)
         if name and name != row["name"]:
             db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
             db.commit()
-            row = db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+            row = dict(db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone())
+
+    # Convert to dict if not already
+    if not isinstance(row, dict):
+        row = dict(row)
 
     return jsonify(
         {
@@ -255,9 +263,12 @@ def buy_reward(reward_id: int):
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
     db = get_db()
-    reward = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
-    if reward is None:
+    reward_row = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
+    if reward_row is None:
         return jsonify({"success": False, "message": "Reward not found"}), 404
+
+    # Convert Row to dict for easier access
+    reward = dict(reward_row)
 
     if user["coins"] < reward["price"]:
         return jsonify(
@@ -310,6 +321,9 @@ def voucher_page(code: str):
 
     if v is None:
         return ("Voucher not found", 404)
+
+    # Convert to dict
+    v = dict(v)
 
     # Simple HTML page (Render-friendly)
     return f"""
