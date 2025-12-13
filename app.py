@@ -356,6 +356,7 @@ def buy_reward(reward_id: int):
 
 
 
+
 @app.get("/voucher/<code>")
 def voucher_page(code: str):
     db = get_db()

@@ -21,12 +21,10 @@ async function initAuth() {
         tg.initDataUnsafe.user.username ||
         "Telegram User";
     } else {
-      // Browser fallback
+      // ✅ Browser fallback: create a stable numeric id
       userId = localStorage.getItem("web_user_id");
       if (!userId) {
-        userId = String(
-          Math.floor(1_000_000_000 + Math.random() * 9_000_000_000)
-        );
+        userId = String(Math.floor(1_000_000_000 + Math.random() * 9_000_000_000));
         localStorage.setItem("web_user_id", userId);
       }
       userName = "Web User";
@@ -35,14 +33,12 @@ async function initAuth() {
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        telegram_id: userId,
-        name: userName,
-      }),
+      body: JSON.stringify({ telegram_id: userId, name: userName }),
     });
 
     const data = await res.json();
     if (!res.ok) {
+      console.error("Auth failed:", data);
       alert("Auth failed");
       return;
     }
@@ -50,7 +46,7 @@ async function initAuth() {
     authToken = String(data.token);
     updateCoins(data.user?.coins ?? 0);
   } catch (err) {
-    console.error(err);
+    console.error("Auth error:", err);
     alert("Could not authenticate");
   }
 }
@@ -67,6 +63,36 @@ function updateCoins(coins) {
   if (el) el.innerHTML = `${coins} <div class="coin-icon"></div>`;
 }
 
+/* ================= LOADING ================= */
+
+function showLoading() {
+  document.getElementById("loading")?.classList.add("active");
+}
+function hideLoading() {
+  document.getElementById("loading")?.classList.remove("active");
+}
+
+/* ================= NAV / VIEW ================= */
+
+function switchTab(viewId, navElement) {
+  showLoading();
+
+  setTimeout(() => {
+    document.querySelectorAll(".view-section").forEach(v => v.classList.remove("active"));
+    document.getElementById(viewId)?.classList.add("active");
+
+    document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+    navElement.classList.add("active");
+
+    if (viewId === "scan-view") startCamera();
+    else stopCamera();
+
+    hideLoading();
+  }, 150);
+}
+// IMPORTANT: make it available for inline onclick="" in HTML
+window.switchTab = switchTab;
+
 /* ================= CAMERA / QR ================= */
 
 const videoElement = document.getElementById("camera-stream");
@@ -81,11 +107,14 @@ async function startCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "environment" },
     });
+
     localStream = stream;
-    videoElement.srcObject = stream;
+    if (videoElement) videoElement.srcObject = stream;
+
     scanning = true;
     requestAnimationFrame(scanLoop);
-  } catch {
+  } catch (err) {
+    console.error("Camera error:", err);
     alert("Camera permission required");
   }
 }
@@ -96,27 +125,30 @@ function stopCamera() {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
   }
+  if (videoElement) videoElement.srcObject = null;
 }
 
 function scanLoop() {
   if (!scanning) return;
 
-  if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+  if (videoElement && videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
     const w = videoElement.videoWidth;
     const h = videoElement.videoHeight;
 
-    qrCanvas.width = w;
-    qrCanvas.height = h;
-    qrCtx.drawImage(videoElement, 0, 0, w, h);
+    if (w && h) {
+      qrCanvas.width = w;
+      qrCanvas.height = h;
+      qrCtx.drawImage(videoElement, 0, 0, w, h);
 
-    const img = qrCtx.getImageData(0, 0, w, h);
-    const code = jsQR(img.data, w, h);
+      const img = qrCtx.getImageData(0, 0, w, h);
+      const code = jsQR(img.data, w, h);
 
-    if (code?.data) {
-      scanning = false;
-      stopCamera();
-      handleQRCode(code.data);
-      return;
+      if (code?.data) {
+        scanning = false;
+        stopCamera();
+        handleQRCode(code.data);
+        return;
+      }
     }
   }
 
@@ -126,39 +158,55 @@ function scanLoop() {
 /* ================= SCAN ================= */
 
 async function handleQRCode(qrText) {
+  if (!authToken) {
+    alert("Not authenticated yet. Reload the page.");
+    return;
+  }
+
+  showLoading();
   const res = await fetch(`${API_BASE}/api/attractions/scan`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ qrText }),
   });
+  const data = await res.json().catch(() => ({}));
+  hideLoading();
 
-  const data = await res.json();
   if (!res.ok) {
-    alert("Scan failed");
+    console.error("Scan failed:", data);
+    alert(data.message || "Scan failed");
     return;
   }
 
   updateCoins(data.newBalance);
-  alert(`+${data.addedCoins} coins`);
+  alert(`✅ +${data.addedCoins} coins`);
 }
 
 /* ================= BUY ================= */
 
 async function buyReward(rewardId, title) {
+  if (!authToken) {
+    alert("Not authenticated yet. Reload the page.");
+    return;
+  }
+
+  showLoading();
   const res = await fetch(`${API_BASE}/api/rewards/${rewardId}/buy`, {
     method: "POST",
     headers: getAuthHeaders(),
   });
+  const data = await res.json().catch(() => ({}));
+  hideLoading();
 
-  const data = await res.json();
   if (!res.ok) {
+    console.error("Buy failed:", data);
     alert(data.message || "Purchase failed");
     return;
   }
 
   updateCoins(data.newBalance);
 
-  // ✅ OLD BEHAVIOR: open voucher immediately
+  // ✅ Open voucher immediately (Telegram in-app or browser tab)
   if (data.voucher?.redeemUrl) {
     const tg = window.Telegram?.WebApp;
     if (tg?.openLink) tg.openLink(data.voucher.redeemUrl);
@@ -173,12 +221,19 @@ async function buyReward(rewardId, title) {
 document.addEventListener("DOMContentLoaded", async () => {
   await initAuth();
 
-  document.addEventListener("click", e => {
+  // Buy button handler
+  document.addEventListener("click", (e) => {
     const btn = e.target.closest(".btn-buy");
     if (!btn) return;
 
+    e.preventDefault();
+    e.stopPropagation();
+
     const rewardId = btn.dataset.rewardId;
-    if (!rewardId) return;
+    if (!rewardId) {
+      alert("Missing data-reward-id on BUY button.");
+      return;
+    }
 
     const card = btn.closest(".card");
     const title =
@@ -187,4 +242,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     buyReward(rewardId, title);
   });
+
+  // Auto-start camera if scan view is active
+  const initialScanView = document.getElementById("scan-view");
+  if (initialScanView?.classList.contains("active")) {
+    startCamera();
+  }
 });
