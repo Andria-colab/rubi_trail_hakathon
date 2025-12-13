@@ -2,6 +2,8 @@ import os
 import sqlite3
 import secrets
 from datetime import datetime
+
+import requests
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
@@ -14,6 +16,40 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
 DB_PATH = os.path.join(INSTANCE_DIR, "rubi_trail.db")
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
+
+# ------------------------------------------------------------
+# Telegram helper
+# ------------------------------------------------------------
+def send_telegram_message(chat_id: str, text: str) -> bool:
+    """
+    Sends a message to a Telegram chat/user.
+    chat_id can be a user_id (DM) or a group/chat id.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN is not set -> skipping telegram message")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        resp = requests.post(
+            url,
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": False,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            print("Telegram send failed:", resp.status_code, resp.text)
+            return False
+        return True
+    except Exception as e:
+        print("Telegram send exception:", repr(e))
+        return False
 
 
 # ------------------------------------------------------------
@@ -168,14 +204,12 @@ def auth_telegram():
         user_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     else:
-        # keep existing coins, update name if provided
         row = dict(row)
         if name and name != row["name"]:
             db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
             db.commit()
             row = dict(db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone())
 
-    # Convert to dict if not already
     if not isinstance(row, dict):
         row = dict(row)
 
@@ -224,7 +258,6 @@ def scan_attraction():
             (user["id"], qr_text, now),
         )
     except sqlite3.IntegrityError:
-        # already scanned
         return jsonify(
             {
                 "success": False,
@@ -257,6 +290,7 @@ def buy_reward(reward_id: int):
     Uses Authorization: Bearer <token>
     Returns:
       { success, message, newBalance, voucher: { code, redeemUrl } }
+    Also sends voucher to Telegram if possible.
     """
     user = require_user()
     if user is None:
@@ -267,34 +301,48 @@ def buy_reward(reward_id: int):
     if reward_row is None:
         return jsonify({"success": False, "message": "Reward not found"}), 404
 
-    # Convert Row to dict for easier access
     reward = dict(reward_row)
 
-    if user["coins"] < reward["price"]:
+    # Refresh user coins from DB (important so it’s always up-to-date)
+    user_row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    user_db = dict(user_row) if user_row else user
+
+    if user_db["coins"] < reward["price"]:
         return jsonify(
             {
                 "success": False,
                 "message": "Not enough coins",
-                "newBalance": user["coins"],
+                "newBalance": user_db["coins"],
             }
         )
 
     # Deduct coins
-    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user["id"]))
+    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (reward["price"], user_db["id"]))
 
     # Create voucher
     code = secrets.token_urlsafe(8)
     now = datetime.utcnow().isoformat()
     db.execute(
         "INSERT INTO vouchers(user_id, reward_id, code, created_at) VALUES (?, ?, ?, ?)",
-        (user["id"], reward_id, code, now),
+        (user_db["id"], reward_id, code, now),
     )
     db.commit()
 
-    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user["id"],)).fetchone()["coins"]
+    new_balance = db.execute("SELECT coins FROM users WHERE id = ?", (user_db["id"],)).fetchone()["coins"]
 
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/voucher/{code}"
+
+    # ✅ Send to Telegram (DM to user's telegram_id)
+    telegram_id = str(user_db.get("telegram_id", "")).strip()
+    if telegram_id:
+        msg = (
+            f"🎫 Voucher created!\n"
+            f"Reward: {reward['title']}\n"
+            f"Code: {code}\n"
+            f"Link: {redeem_url}"
+        )
+        send_telegram_message(telegram_id, msg)
 
     return jsonify(
         {
@@ -322,10 +370,8 @@ def voucher_page(code: str):
     if v is None:
         return ("Voucher not found", 404)
 
-    # Convert to dict
     v = dict(v)
 
-    # Simple HTML page (Render-friendly)
     return f"""
     <!doctype html>
     <html>
