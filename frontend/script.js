@@ -1,61 +1,54 @@
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
-// ✅ your Render backend URL (NO trailing slash is fine)
+// Render backend
 const API_BASE = "https://rubi-trail-hakathon.onrender.com";
 
-let authToken = null; // backend user id (string)
+let authToken = null;
 
-// ---------- AUTH ----------
-
+// ---------- AUTH (Telegram Mini App) ----------
 async function initAuth() {
   try {
     const tg = window.Telegram?.WebApp;
     if (!tg) {
-      alert("This app must be opened inside Telegram.");
+      alert("Open this inside Telegram.");
       return;
     }
 
     tg.ready();
 
-    const tgUser = tg.initDataUnsafe?.user;
-    if (!tgUser?.id) {
-      alert("Telegram user not available.");
+    // IMPORTANT: send initData to backend for verification
+    const initData = tg.initData;
+    if (!initData) {
+      alert("Telegram initData missing.");
       return;
     }
 
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        telegram_id: String(tgUser.id),
-        name:
-          tgUser.first_name ||
-          tgUser.username ||
-          "Telegram User",
-      }),
+      body: JSON.stringify({ initData }),
     });
 
     const data = await res.json();
+
     if (!res.ok) {
-      console.error("Auth failed:", data);
-      alert("Authentication failed.");
+      console.error("Auth failed response:", data);
+      alert(data.error || "Auth failed (backend rejected Telegram initData).");
       return;
     }
 
     authToken = String(data.token);
+    console.log("✅ Auth token:", authToken);
 
     const balanceElement = document.querySelector(".coin-balance");
     if (balanceElement && data.user) {
       balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
     }
-
-    console.log("✅ Authenticated as Telegram user:", tgUser.id);
   } catch (err) {
-    console.error("Auth error:", err);
-    alert("Cannot connect to backend.");
+    console.error("Auth failed:", err);
+    alert("Could not connect to backend (auth). Is Render backend running?");
   }
 }
-
 
 function getAuthHeaders() {
   return {
@@ -64,7 +57,6 @@ function getAuthHeaders() {
   };
 }
 
-// If token missing, try auth again (helps with race conditions)
 async function ensureAuth() {
   if (authToken) return true;
   await initAuth();
@@ -72,19 +64,15 @@ async function ensureAuth() {
 }
 
 // ---------- TAB SWITCHING / CAMERA ----------
-
 function switchTab(viewId, navElement) {
   showLoading();
 
   setTimeout(() => {
-    const views = document.querySelectorAll(".view-section");
-    views.forEach((view) => view.classList.remove("active"));
-
+    document.querySelectorAll(".view-section").forEach((v) => v.classList.remove("active"));
     const activeView = document.getElementById(viewId);
     if (activeView) activeView.classList.add("active");
 
-    const navItems = document.querySelectorAll(".nav-item");
-    navItems.forEach((item) => item.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
     navElement.classList.add("active");
 
     if (viewId === "scan-view") startCamera();
@@ -98,7 +86,6 @@ const videoElement = document.getElementById("camera-stream");
 let localStream;
 let scanning = false;
 
-// hidden canvas for QR decoding
 const qrCanvas = document.createElement("canvas");
 const qrCtx = qrCanvas.getContext("2d");
 
@@ -169,7 +156,6 @@ function scanLoop() {
 }
 
 // ---------- BACKEND CALL FOR QR ----------
-
 async function handleQRCode(decodedText) {
   const ok = await ensureAuth();
   if (!ok) {
@@ -179,7 +165,6 @@ async function handleQRCode(decodedText) {
 
   showLoading();
   try {
-    // ✅ IMPORTANT: backend expects "qrText"
     const res = await fetch(`${API_BASE}/api/attractions/scan`, {
       method: "POST",
       headers: getAuthHeaders(),
@@ -212,7 +197,6 @@ async function handleQRCode(decodedText) {
 }
 
 // ---------- BUY REWARD ----------
-
 async function buyReward(rewardId, titleForAlert) {
   const ok = await ensureAuth();
   if (!ok) {
@@ -242,7 +226,8 @@ async function buyReward(rewardId, titleForAlert) {
         balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
       }
 
-      alert(`✅ Bought: ${titleForAlert}\nVoucher created!\n${data.voucher.redeemUrl}`);
+      // Backend sends QR to Telegram DM. This is just a fallback link.
+      alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram via bot.\n\nLink:\n${data.voucher.redeemUrl}`);
       console.log("Voucher URL:", data.voucher.redeemUrl);
     } else {
       alert(`❌ ${data.message || "Could not buy reward."}`);
@@ -255,7 +240,6 @@ async function buyReward(rewardId, titleForAlert) {
 }
 
 // ---------- LOADING OVERLAY ----------
-
 function showLoading() {
   const el = document.getElementById("loading");
   if (el) el.classList.add("active");
@@ -267,7 +251,6 @@ function hideLoading() {
 }
 
 // ---------- SAFE AREAS ----------
-
 function updateSafeAreas() {
   const header = document.querySelector("header");
   const nav = document.querySelector("nav");
@@ -283,12 +266,11 @@ window.addEventListener("resize", updateSafeAreas);
 window.addEventListener("orientationchange", updateSafeAreas);
 
 // ---------- DOM READY ----------
-
 document.addEventListener("DOMContentLoaded", async () => {
   updateSafeAreas();
   await initAuth();
 
-  // One click handler for all BUY buttons
+  // BUY buttons
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest(".btn-buy");
     if (!btn) return;
@@ -303,13 +285,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const card = btn.closest(".card");
-    const title =
-      card?.querySelector(".card-title")?.textContent?.trim() || `Reward #${rewardId}`;
+    const title = card?.querySelector(".card-title")?.textContent?.trim() || `Reward #${rewardId}`;
 
     buyReward(rewardId, title);
   });
 
-  // If initial tab is scan-view, start camera immediately
+  // start scan camera if scan tab is active
   const initialScanView = document.getElementById("scan-view");
   if (initialScanView && initialScanView.classList.contains("active")) {
     startCamera();
