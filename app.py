@@ -336,22 +336,27 @@ def buy_reward(reward_id: int):
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
     db = get_db()
+    
+    # Get reward details
     reward_row = db.execute("SELECT * FROM rewards WHERE id = ?", (reward_id,)).fetchone()
     if reward_row is None:
         return jsonify({"success": False, "message": "Reward not found"}), 404
 
     reward = dict(reward_row)
 
-    # Refresh user from DB to get latest coin balance
+    # IMPORTANT: Always get fresh user data from DB before checking balance
     user_row = db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-    if user_row:
-        user = dict(user_row)
+    if not user_row:
+        return jsonify({"success": False, "message": "User not found"}), 404
+    
+    user = dict(user_row)
 
+    # Check if user has enough coins
     if user["coins"] < reward["price"]:
         return jsonify(
             {
                 "success": False,
-                "message": "Not enough coins",
+                "message": f"Not enough coins. You have {user['coins']}, need {reward['price']}.",
                 "newBalance": user["coins"],
             }
         )
