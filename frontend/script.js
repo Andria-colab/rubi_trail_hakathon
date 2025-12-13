@@ -8,25 +8,42 @@ let authToken = null;
 async function initAuth() {
   try {
     const tg = window.Telegram?.WebApp;
-    if (!tg) {
-      alert("Open this inside Telegram.");
-      return;
-    }
 
-    tg.ready();
+    let userId = null;
+    let userName = null;
 
-    const tgUser = tg.initDataUnsafe?.user;
-    if (!tgUser?.id) {
-      alert("Telegram user not available.");
-      return;
+    if (tg) {
+      // Telegram Mini App
+      tg.ready();
+
+      const tgUser = tg.initDataUnsafe?.user;
+      if (!tgUser?.id) {
+        alert("Telegram user not available.");
+        return;
+      }
+
+      userId = String(tgUser.id);
+      userName = tgUser.first_name || tgUser.username || "Telegram User";
+    } else {
+      // ✅ Normal browser fallback (so it opens outside Telegram)
+      const stored = localStorage.getItem("web_user_id");
+      if (stored && /^\d+$/.test(stored)) {
+        userId = stored;
+      } else {
+        // backend requires numeric telegram_id
+        userId = String(Math.floor(1_000_000_000 + Math.random() * 9_000_000_000));
+        localStorage.setItem("web_user_id", userId);
+      }
+
+      userName = localStorage.getItem("web_user_name") || "Web User";
     }
 
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        telegram_id: String(tgUser.id),
-        name: tgUser.first_name || tgUser.username || "Telegram User",
+        telegram_id: userId,
+        name: userName,
       }),
     });
 
@@ -230,10 +247,11 @@ async function buyReward(rewardId, titleForAlert) {
     if (data.success) {
       updateCoins(data.newBalance);
 
-      // ✅ In Telegram mini app, better UX: open voucher in browser
-      const tg = window.Telegram?.WebApp;
-      if (tg?.openLink && data.voucher?.redeemUrl) {
-        tg.openLink(data.voucher.redeemUrl);
+      // ✅ Open voucher link in Telegram OR normal browser
+      if (data.voucher?.redeemUrl) {
+        const tg = window.Telegram?.WebApp;
+        if (tg?.openLink) tg.openLink(data.voucher.redeemUrl);
+        else window.open(data.voucher.redeemUrl, "_blank");
       }
 
       alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram chat ✅`);
