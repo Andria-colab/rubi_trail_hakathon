@@ -1,11 +1,10 @@
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
-// Render backend
 const API_BASE = "https://rubi-trail-hakathon.onrender.com";
-
 let authToken = null;
 
-// ---------- AUTH (Telegram Mini App) ----------
+// ---------- AUTH ----------
+
 async function initAuth() {
   try {
     const tg = window.Telegram?.WebApp;
@@ -16,39 +15,46 @@ async function initAuth() {
 
     tg.ready();
 
-    const initData = tg.initData;
-    if (!initData) {
-      alert("Telegram initData missing (must be opened as a Mini App).");
+    const tgUser = tg.initDataUnsafe?.user;
+    if (!tgUser?.id) {
+      alert("Telegram user not available.");
       return;
     }
 
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify({
+        telegram_id: String(tgUser.id),
+        name: tgUser.first_name || tgUser.username || "Telegram User",
+      }),
     });
 
     const data = await res.json();
+
     if (!res.ok) {
-      console.error("Auth failed:", data);
-      alert("Auth failed: " + (data.error || "unknown"));
+      console.error("Auth failed response:", data);
+      alert("Auth failed. Check backend logs.");
       return;
     }
 
+    // ✅ token is telegram_id now
     authToken = String(data.token);
+    console.log("✅ Auth token:", authToken);
 
-    const balanceElement = document.querySelector(".coin-balance");
-    if (balanceElement && data.user) {
-      balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
-    }
-
-    console.log("✅ Auth OK, token:", authToken);
+    updateCoins(data.user?.coins ?? 0);
   } catch (err) {
-    console.error("Auth error:", err);
-    alert("Cannot connect to backend.");
+    console.error("Auth failed:", err);
+    alert("Could not connect to backend.");
   }
 }
 
+function updateCoins(coins) {
+  const balanceElement = document.querySelector(".coin-balance");
+  if (balanceElement) {
+    balanceElement.innerHTML = `${coins} <div class="coin-icon"></div>`;
+  }
+}
 
 function getAuthHeaders() {
   return {
@@ -64,15 +70,15 @@ async function ensureAuth() {
 }
 
 // ---------- TAB SWITCHING / CAMERA ----------
+
 function switchTab(viewId, navElement) {
   showLoading();
 
   setTimeout(() => {
-    document.querySelectorAll(".view-section").forEach((v) => v.classList.remove("active"));
-    const activeView = document.getElementById(viewId);
-    if (activeView) activeView.classList.add("active");
+    document.querySelectorAll(".view-section").forEach(v => v.classList.remove("active"));
+    document.getElementById(viewId)?.classList.add("active");
 
-    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+    document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
     navElement.classList.add("active");
 
     if (viewId === "scan-view") startCamera();
@@ -83,7 +89,7 @@ function switchTab(viewId, navElement) {
 }
 
 const videoElement = document.getElementById("camera-stream");
-let localStream;
+let localStream = null;
 let scanning = false;
 
 const qrCanvas = document.createElement("canvas");
@@ -120,29 +126,28 @@ async function startCamera() {
 function stopCamera() {
   scanning = false;
   if (localStream) {
-    localStream.getTracks().forEach((t) => t.stop());
-    if (videoElement) videoElement.srcObject = null;
+    localStream.getTracks().forEach(t => t.stop());
     localStream = null;
   }
+  if (videoElement) videoElement.srcObject = null;
 }
 
 function scanLoop() {
   if (!scanning) return;
 
   if (videoElement && videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
-    const width = videoElement.videoWidth;
-    const height = videoElement.videoHeight;
+    const w = videoElement.videoWidth;
+    const h = videoElement.videoHeight;
 
-    if (width && height) {
-      qrCanvas.width = width;
-      qrCanvas.height = height;
+    if (w && h) {
+      qrCanvas.width = w;
+      qrCanvas.height = h;
+      qrCtx.drawImage(videoElement, 0, 0, w, h);
 
-      qrCtx.drawImage(videoElement, 0, 0, width, height);
-      const imageData = qrCtx.getImageData(0, 0, width, height);
+      const imageData = qrCtx.getImageData(0, 0, w, h);
+      const code = jsQR(imageData.data, w, h, { inversionAttempts: "dontInvert" });
 
-      const code = jsQR(imageData.data, width, height, { inversionAttempts: "dontInvert" });
-
-      if (code && code.data) {
+      if (code?.data) {
         console.log("✅ QR payload:", code.data);
         scanning = false;
         stopCamera();
@@ -155,13 +160,17 @@ function scanLoop() {
   requestAnimationFrame(scanLoop);
 }
 
-// ---------- BACKEND CALL FOR QR ----------
+// ---------- SCAN ----------
+
 async function handleQRCode(decodedText) {
   const ok = await ensureAuth();
   if (!ok) {
-    alert("Not authenticated yet. Reload the page.");
+    alert("Not authenticated yet. Reload.");
     return;
   }
+
+  console.log("AUTH TOKEN:", authToken);
+  console.log("SENDING QR:", decodedText);
 
   showLoading();
   try {
@@ -181,10 +190,7 @@ async function handleQRCode(decodedText) {
     }
 
     if (data.success) {
-      const balanceElement = document.querySelector(".coin-balance");
-      if (balanceElement) {
-        balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
-      }
+      updateCoins(data.newBalance);
       alert(`✅ ${data.message}\n+${data.addedCoins} coins`);
     } else {
       alert(`❌ ${data.message}`);
@@ -192,11 +198,12 @@ async function handleQRCode(decodedText) {
   } catch (err) {
     hideLoading();
     console.error(err);
-    alert("Network error talking to backend when scanning QR.");
+    alert("Network error during scan.");
   }
 }
 
-// ---------- BUY REWARD ----------
+// ---------- BUY ----------
+
 async function buyReward(rewardId, titleForAlert) {
   const ok = await ensureAuth();
   if (!ok) {
@@ -221,14 +228,15 @@ async function buyReward(rewardId, titleForAlert) {
     }
 
     if (data.success) {
-      const balanceElement = document.querySelector(".coin-balance");
-      if (balanceElement) {
-        balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
+      updateCoins(data.newBalance);
+
+      // ✅ In Telegram mini app, better UX: open voucher in browser
+      const tg = window.Telegram?.WebApp;
+      if (tg?.openLink && data.voucher?.redeemUrl) {
+        tg.openLink(data.voucher.redeemUrl);
       }
 
-      // Backend sends QR to Telegram DM. This is just a fallback link.
-      alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram via bot.\n\nLink:\n${data.voucher.redeemUrl}`);
-      console.log("Voucher URL:", data.voucher.redeemUrl);
+      alert(`✅ Bought: ${titleForAlert}\nVoucher sent to your Telegram chat ✅`);
     } else {
       alert(`❌ ${data.message || "Could not buy reward."}`);
     }
@@ -239,38 +247,20 @@ async function buyReward(rewardId, titleForAlert) {
   }
 }
 
-// ---------- LOADING OVERLAY ----------
+// ---------- LOADING ----------
+
 function showLoading() {
-  const el = document.getElementById("loading");
-  if (el) el.classList.add("active");
+  document.getElementById("loading")?.classList.add("active");
 }
-
 function hideLoading() {
-  const el = document.getElementById("loading");
-  if (el) el.classList.remove("active");
+  document.getElementById("loading")?.classList.remove("active");
 }
-
-// ---------- SAFE AREAS ----------
-function updateSafeAreas() {
-  const header = document.querySelector("header");
-  const nav = document.querySelector("nav");
-
-  const safeAreaTop = getComputedStyle(document.documentElement).getPropertyValue("--safe-area-top");
-  const safeAreaBottom = getComputedStyle(document.documentElement).getPropertyValue("--safe-area-bottom");
-
-  if (safeAreaTop && safeAreaTop !== "0px" && header) header.style.paddingTop = safeAreaTop;
-  if (safeAreaBottom && safeAreaBottom !== "0px" && nav) nav.style.paddingBottom = safeAreaBottom;
-}
-
-window.addEventListener("resize", updateSafeAreas);
-window.addEventListener("orientationchange", updateSafeAreas);
 
 // ---------- DOM READY ----------
+
 document.addEventListener("DOMContentLoaded", async () => {
-  updateSafeAreas();
   await initAuth();
 
-  // BUY buttons
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest(".btn-buy");
     if (!btn) return;
@@ -285,14 +275,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const card = btn.closest(".card");
-    const title = card?.querySelector(".card-title")?.textContent?.trim() || `Reward #${rewardId}`;
+    const title =
+      card?.querySelector(".card-reward")?.textContent?.trim() ||
+      `Reward #${rewardId}`;
 
     buyReward(rewardId, title);
   });
 
-  // start scan camera if scan tab is active
   const initialScanView = document.getElementById("scan-view");
-  if (initialScanView && initialScanView.classList.contains("active")) {
+  if (initialScanView?.classList.contains("active")) {
     startCamera();
   }
 });
