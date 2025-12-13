@@ -1,9 +1,14 @@
 Flask==2.3.2
 Flask-Cors==3.0.10
+Flask-SQLAlchemy==3.1.1
+
+SQLAlchemy==2.0.36
+
 gunicorn==21.2.0
-itsdangerous==2.1.2
-Jinja2==3.1.2
 Werkzeug==2.3.6
+Jinja2==3.1.2
+itsdangerous==2.1.2
+
 requests==2.32.3
 qrcode[pil]==7.4.2
 Pillow>=11.0.0
