@@ -1,6 +1,6 @@
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
-const API_BASE = "http://127.0.0.1:5000";
+const API_BASE = "https://rubi-trail-hakathon.onrender.com";
 
 let authToken = null; // this will be our "user id" from backend
 
