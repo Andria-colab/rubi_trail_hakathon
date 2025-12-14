@@ -239,10 +239,20 @@ def get_current_user():
 def serve_index():
     return app.send_static_file("index.html")
 
+@app.post("/auth/telegram")
+def auth_telegram():
+    body = request.get_json(silent=True) or {}
+    init_data = (body.get("initData") or "").strip()
 
-@app.get("/health")
-def health():
-    return jsonify({"status": "ok"}), 200
+    print("INIT DATA RECEIVED LENGTH:", len(init_data))
+    print("BOT TOKEN SET:", bool(TELEGRAM_BOT_TOKEN))
+
+    tg_user = verify_telegram_init_data(init_data)
+
+    if not tg_user:
+        print("❌ TELEGRAM VERIFY FAILED")
+        return jsonify({"error": "Invalid Telegram auth"}), 401
+
 
 
 # -----------------------
