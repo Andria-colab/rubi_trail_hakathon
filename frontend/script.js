@@ -5,6 +5,8 @@ console.log("🔥 FRONTEND SCRIPT LOADED");
 const API_BASE = "https://rubi-trail-hakathon.onrender.com";
 
 let authToken = null;
+let authReady = false;
+
 
 function showLoading() {
   const el = document.getElementById("loading");
@@ -81,9 +83,16 @@ async function initAuth() {
       return;
     }
 
-    authToken = data.token;
+authToken = data.token;
+authReady = true;
 
-    if (data.user) setCoinBalance(data.user.coins);
+if (data.user) setCoinBalance(data.user.coins);
+
+// ✅ If user is already on Rewards tab, load now
+if (document.getElementById("rewards-view")?.classList.contains("active")) {
+  loadRewards();
+}
+
   } catch (err) {
     console.error("Auth failed:", err);
     alert("Could not connect to backend (auth).");
