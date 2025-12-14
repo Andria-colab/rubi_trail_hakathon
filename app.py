@@ -120,9 +120,9 @@ def seed_if_empty():
     db.session.add_all([s1, s2, s3])
     db.session.flush()
 
-    r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=200)
-    r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=150)
-    r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=100)
+    r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=20)
+    r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=15)
+    r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=10)
     db.session.add_all([r1, r2, r3])
 
     a1 = Attraction(
