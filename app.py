@@ -101,10 +101,69 @@ class Voucher(db.Model):
     service = db.relationship("Service", backref="vouchers")
 
 
+# -----------------------
+# STARTUP DB INIT + SAFE SEED
+# -----------------------
+def seed_if_empty():
+    # If already seeded, do nothing
+    if Reward.query.first() is not None:
+        print("✅ Seed skipped (already has rewards)")
+        return
+
+    print("🌱 Seeding initial data...")
+
+    # Services
+    s1 = Service(name="Tavaduri", logo_url="", description="Cozy restaurant.")
+    s2 = Service(name="Art House Cafe", logo_url="", description="Cafe.")
+    s3 = Service(name="Museum of Arts", logo_url="", description="Museum.")
+    db.session.add_all([s1, s2, s3])
+    db.session.flush()  # gets IDs
+
+    # Rewards
+    r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=20)
+    r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=15)
+    r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=10)
+    db.session.add_all([r1, r2, r3])
+
+    # Attractions
+    a1 = Attraction(
+        title="Ali and Nino",
+        description="Batumi Boulevard attraction.",
+        address="Batumi Boulevard",
+        lat=41.6539,
+        lon=41.6360,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit27",
+    )
+    a2 = Attraction(
+        title="Alphabetic Tower",
+        description="Batumi Boulevard attraction.",
+        address="Batumi Boulevard",
+        lat=41.656088567441216,
+        lon=41.639600470801206,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit90",
+    )
+    a3 = Attraction(
+        title="GITA TouristHack 2025",
+        description="Tech Park Batumi attraction.",
+        address="Tech Park Batumi",
+        lat=41.62386745993197,
+        lon=41.62490440795824,
+        reward_coins=10,
+        qr_code_value="AliAndNiNoVisit72",
+    )
+    db.session.add_all([a1, a2, a3])
+
+    db.session.commit()
+    print("✅ Seeded services/rewards/attractions")
+
 
 with app.app_context():
     db.create_all()
-    print("✅ DB tables ensured (create_all)")
+    seed_if_empty()
+    print("✅ DB ready")
+
 
 # -----------------------
 # TELEGRAM HELPERS
@@ -175,73 +234,12 @@ def get_current_user():
 # -----------------------
 @app.get("/")
 def serve_index():
-    # serves frontend/index.html
     return app.send_static_file("index.html")
 
 
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"}), 200
-
-
-# -----------------------
-# DEV: init db + seed
-# -----------------------
-def create_demo_data():
-    db.drop_all()
-    db.create_all()
-
-    user = User(telegram_id="6732377993", name="Demo User", coins=0)
-    db.session.add(user)
-
-    a1 = Attraction(
-        title="Ali and Nino",
-        description="Batumi Boulevard attraction.",
-        address="Batumi Boulevard",
-        lat=41.6539,
-        lon=41.6360,
-        reward_coins=10,
-        qr_code_value="AliAndNiNoVisit27",
-    )
-    a2 = Attraction(
-        title="Alphabetic Tower",
-        description="Batumi Boulevard attraction.",
-        address="Batumi Boulevard",
-        lat=41.656088567441216,
-        lon=41.639600470801206,
-        reward_coins=10,
-        qr_code_value="AliAndNiNoVisit90",
-    )
-    a3 = Attraction(
-        title="GITA TouristHack 2025",
-        description="Tech Park Batumi attraction.",
-        address="Tech Park Batumi",
-        lat=41.62386745993197,
-        lon=41.62490440795824,
-        reward_coins=10,
-        qr_code_value="AliAndNiNoVisit72",
-    )
-    db.session.add_all([a1, a2, a3])
-
-    s1 = Service(name="Tavaduri", logo_url="", description="Cozy restaurant.")
-    s2 = Service(name="Art House Cafe", logo_url="", description="Cafe.")
-    s3 = Service(name="Museum of Arts", logo_url="", description="Museum.")
-    db.session.add_all([s1, s2, s3])
-    db.session.flush()
-
-    r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=20)
-    r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=15)
-    r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=10)
-    db.session.add_all([r1, r2, r3])
-
-    db.session.commit()
-    print("✅ Demo data created. Demo User ID:", user.id)
-
-
-@app.get("/init-db")
-def init_db_route():
-    create_demo_data()
-    return "Database initialized with demo data."
 
 
 # -----------------------
@@ -266,7 +264,10 @@ def auth_telegram():
             user.name = name
             db.session.commit()
 
-    return jsonify({"token": str(user.id), "user": {"id": user.id, "name": user.name, "coins": user.coins}})
+    return jsonify({
+        "token": str(user.id),
+        "user": {"id": user.id, "name": user.name, "coins": user.coins}
+    })
 
 
 @app.get("/api/me")
@@ -284,9 +285,8 @@ def scan_attraction():
         return jsonify({"success": False, "message": "Unauthorized"}), 401
 
     data = request.get_json(silent=True) or {}
-
-    # ✅ Accept both keys so frontend variants work
     qr_value = (data.get("qrText") or data.get("code") or "").strip()
+
     if not qr_value:
         return jsonify({"success": False, "message": "No QR code provided"}), 400
 
@@ -296,13 +296,23 @@ def scan_attraction():
 
     existing = Visit.query.filter_by(user_id=user.id, attraction_id=attraction.id).first()
     if existing:
-        return jsonify({"success": False, "message": "You already claimed this spot.", "newBalance": user.coins, "addedCoins": 0})
+        return jsonify({
+            "success": False,
+            "message": "You already claimed this spot.",
+            "newBalance": user.coins,
+            "addedCoins": 0
+        })
 
     user.coins += attraction.reward_coins
     db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
     db.session.commit()
 
-    return jsonify({"success": True, "message": f"You discovered {attraction.title}!", "addedCoins": attraction.reward_coins, "newBalance": user.coins})
+    return jsonify({
+        "success": True,
+        "message": f"You discovered {attraction.title}!",
+        "addedCoins": attraction.reward_coins,
+        "newBalance": user.coins
+    })
 
 
 @app.get("/api/rewards")
@@ -346,6 +356,7 @@ def buy_reward(reward_id: int):
         return jsonify({"success": False, "message": "Not enough coins.", "newBalance": user.coins}), 400
 
     user.coins -= reward.price_coins
+
     token = secrets.token_urlsafe(16)
     voucher = Voucher(
         user_id=user.id,
@@ -360,7 +371,6 @@ def buy_reward(reward_id: int):
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/v/{token}"
 
-    # Send QR + fallback text
     caption = f"🎫 Your Rubi Trail voucher\n{reward.title}\n\nOpen: {redeem_url}"
     sent_qr = send_telegram_qr(user.telegram_id, caption, redeem_url)
     if not sent_qr:
@@ -370,7 +380,12 @@ def buy_reward(reward_id: int):
         "success": True,
         "message": "Voucher created.",
         "newBalance": user.coins,
-        "voucher": {"id": voucher.id, "redeemUrl": redeem_url, "rewardTitle": reward.title, "serviceName": reward.service.name},
+        "voucher": {
+            "id": voucher.id,
+            "redeemUrl": redeem_url,
+            "rewardTitle": reward.title,
+            "serviceName": reward.service.name
+        },
     })
 
 
@@ -421,7 +436,14 @@ def voucher_page(token: str):
     if not v or v.status != "ACTIVE":
         return render_template_string(VOUCHER_TEMPLATE, invalid=True)
 
-    return render_template_string(VOUCHER_TEMPLATE, invalid=False, token=token, voucher=v, reward=v.reward, service=v.service)
+    return render_template_string(
+        VOUCHER_TEMPLATE,
+        invalid=False,
+        token=token,
+        voucher=v,
+        reward=v.reward,
+        service=v.service
+    )
 
 
 @app.post("/api/vouchers/redeem")
