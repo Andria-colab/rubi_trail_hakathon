@@ -141,7 +141,7 @@ def seed_if_empty():
         address="Batumi Boulevard",
         lat=41.656088567441216,
         lon=41.639600470801206,
-        reward_coins=10,
+        reward_coins=100,
         qr_code_value="AliAndNiNoVisit90",
     )
     a3 = Attraction(
