@@ -1,161 +1,78 @@
 <!DOCTYPE html> 
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Rubi Trail</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Rubi Trail</title>
 
-    <link rel="stylesheet" href="./style.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-/>
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 
 <body>
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div>Loading...</div>
+  </div>
 
-    <div class="loading" id="loading">
-        <div class="spinner"></div>
-        <div>Loading...</div>
-    </div>
-<header>
+  <header>
     <div class="app-title">
-        <img src="../Images/logo_PNG.png" class="app-logo">
-        Rubi Trail
+      <img src="../Images/logo_PNG.png" class="app-logo">
+      Rubi Trail
     </div>
 
     <div class="coin-balance">
-    -- <div class="coin-icon"></div>
+      -- <div class="coin-icon"></div>
     </div>
+  </header>
 
-</header>
+  <main>
+    <section id="scan-view" class="view-section active">
+      <video id="camera-stream" autoplay playsinline muted></video>
+      <div class="scan-overlay">
+        <div class="scan-text">Align the QR code inside the frame</div>
+        <div class="scan-frame"></div>
+      </div>
+    </section>
 
+    <section id="discover-view" class="view-section">
+      <!-- your cards... -->
+    </section>
 
-    <main>
+    <section id="rewards-view" class="view-section">
+      <!-- your cards... -->
+    </section>
 
-        <section id="scan-view" class="view-section active">
-            <video id="camera-stream" autoplay playsinline muted></video>
-            
-            <div class="scan-overlay">
-                <div class="scan-text">Align the QR code inside the frame</div>
-                <div class="scan-frame"></div>
-            </div>
-        </section>
+    <section id="map-view" class="view-section">
+      <div id="map"></div>
+    </section>
+  </main>
 
-        <section id="discover-view" class="view-section">
-            <div class="card">
-                <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSnu5nA0CdvI7yiZIQv-DLOpP2gtfjQCZF-vQ&sjpg" class="card-img" alt="Ali and Nino">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">Ali and Nino</div>
-                        <div class="card-reward">REWARD : 10 <div class="coin-small"></div></div>
-                        <div class="card-location">Location : Seafront Promenade</div>
-                        <p class="card-desc">
-                            Star-crossed lovers in pre-Soviet Baku, Ali and Nino battle cultural, religious, and political divides as war, nationalism, and modernity test their devotion.
-                        </p>
-                    </div>
-                </div>
-            </div>
+  <nav>
+    <a href="#" class="nav-item active" onclick="switchTab('scan-view', this)">
+      <span class="nav-icon">📷</span>
+      Scan
+    </a>
+    <a href="#" class="nav-item" onclick="switchTab('discover-view', this)">
+      <span class="nav-icon">🔍</span>
+      Discover
+    </a>
+    <a href="#" class="nav-item" onclick="switchTab('rewards-view', this)">
+      <span class="nav-icon">🏆</span>
+      Rewards
+    </a>
+    <a href="#" class="nav-item" onclick="switchTab('map-view', this)">
+      <span class="nav-icon">🗺️</span>
+      Map
+    </a>
+  </nav>
 
-            <div class="card">
-                <img src="https://cdn.georgia.to/img/thumbnails/4SPspoJhk72WETe3sSjND5_smedium.jpg" class="card-img" alt="Flame Towers">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">Alphabetic Tower</div>
-                        <div class="card-reward">REWARD : 10 <div class="coin-small"></div></div>
-                        <div class="card-location">Location : By Batumi Beach</div>
-                        <p class="card-desc">
-                            The Alphabetic Tower is a striking landmark that celebrates the Georgian alphabet, with its unique letters spiraling up the structure’s exterior. It symbolizes the country’s deep respect for language, identity, and cultural continuity while blending tradition with modern architecture.
-                        </p>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="card">
-                <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTg1Jsw8MUbLboM9usq0ZrNebJ63j6Beze7vQ&s" class="card-img" alt="Maiden Tower">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">GITA TouristHack 2025</div>
-                        <div class="card-reward">REWARD : 10 <div class="coin-small"></div></div>
-                        <div class="card-location">Location : Batumi Tech Park</div>
-                        <p class="card-desc">
-                            GITA TouristHack 2025 is a high-energy innovation hackathon that brings together students, developers, and entrepreneurs to build tech solutions for tourism and smart cities in Georgia. The event focuses on real-world impact, combining culture, technology, and entrepreneurship to turn bold ideas into working products.
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </section>
+  <!-- ✅ REQUIRED FOR TELEGRAM MINI APP AUTH -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-        <section id="rewards-view" class="view-section">
-            <div class="card">
-                <img src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Restaurant">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">PRICE : 200 <div class="coin-small"></div></div>
-                        <div class="card-reward">Restaurant : Tavaduri</div>
-                        <div class="card-location">Location : Lermonovi Street 9</div>
-                        <div class="cashback-text">20% CASHBACK (MAX 40 LARI)</div>
-                    </div>
-                    <button class="btn-buy" data-reward-id="1" type="button">BUY</button>
-                </div>
-            </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 
-            <div class="card">
-                <img src="https://images.unsplash.com/photo-1559925393-8be0ec4767c8?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Cafe">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">PRICE : 150 <div class="coin-small"></div></div>
-                        <div class="card-reward">Cafe : Art House</div>
-                        <div class="card-location">Location : Nizami Street 45</div>
-                        <div class="cashback-text">15% CASHBACK (MAX 30 LARI)</div>
-                    </div>
-                    <button class="btn-buy" data-reward-id="2" type="button">BUY</button>
-                </div>
-            </div>
-            
-            <div class="card">
-                <img src="https://images.unsplash.com/photo-1566073771259-6a8506099945?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80" class="card-img" alt="Museum">
-                <div class="card-content">
-                    <div>
-                        <div class="card-title">PRICE : 100 <div class="coin-small"></div></div>
-                        <div class="card-reward">Museum : Modern Art</div>
-                        <div class="card-location">Location : City Center</div>
-                        <div class="cashback-text">FREE ENTRY </div>
-                    </div>
-                    <button class="btn-buy" data-reward-id="3" type="button">BUY</button>
-                </div>
-            </div>
-        </section>
-
-        <section id="map-view" class="view-section">
-          <div id="map"></div>
-        </section>
-
-
-    </main>
-
-    <nav>
-        <a href="#" class="nav-item active" onclick="switchTab('scan-view', this)">
-            <span class="nav-icon">📷</span>
-            Scan
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('discover-view', this)">
-            <span class="nav-icon">🔍</span>
-            Discover
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('rewards-view', this)">
-            <span class="nav-icon">🏆</span>
-            Rewards
-        </a>
-        <a href="#" class="nav-item" onclick="switchTab('map-view', this)">
-            <span class="nav-icon">🗺️</span>
-            Map
-        </a>
-    </nav>
-
-
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-    
-    <script src="./script.js"></script>
+  <script src="./script.js"></script>
 </body>
 </html>
