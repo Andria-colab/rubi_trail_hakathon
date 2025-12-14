@@ -235,10 +235,17 @@ def get_current_user():
 # -----------------------
 # FRONTEND
 # -----------------------
+# -----------------------
+# FRONTEND
+# -----------------------
 @app.get("/")
 def serve_index():
     return app.send_static_file("index.html")
 
+
+# -----------------------
+# API
+# -----------------------
 @app.post("/auth/telegram")
 def auth_telegram():
     body = request.get_json(silent=True) or {}
@@ -248,24 +255,8 @@ def auth_telegram():
     print("BOT TOKEN SET:", bool(TELEGRAM_BOT_TOKEN))
 
     tg_user = verify_telegram_init_data(init_data)
-
     if not tg_user:
         print("❌ TELEGRAM VERIFY FAILED")
-        return jsonify({"error": "Invalid Telegram auth"}), 401
-
-
-
-# -----------------------
-# API
-# -----------------------
-@app.post("/auth/telegram")
-def auth_telegram():
-    body = request.get_json(silent=True) or {}
-
-    init_data = (body.get("initData") or "").strip()
-    tg_user = verify_telegram_init_data(init_data)
-
-    if not tg_user:
         return jsonify({"error": "Not launched as Telegram Mini App (no valid initData)."}), 401
 
     telegram_id = str(tg_user["id"])
@@ -284,7 +275,10 @@ def auth_telegram():
             user.name = name
             db.session.commit()
 
-    return jsonify({"token": str(user.id), "user": {"id": user.id, "name": user.name, "coins": user.coins}})
+    return jsonify({
+        "token": str(user.id),
+        "user": {"id": user.id, "name": user.name, "coins": user.coins}
+    }), 200
 
 
 @app.get("/api/me")
