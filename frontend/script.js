@@ -191,49 +191,48 @@ function scanLoop() {
 
 // ---------------- TAB SWITCH ----------------
 // ---------------- TAB SWITCH (FIXED) ----------------
+// ---------------- TABS + MAP (RELIABLE) ----------------
 let map = null;
 
-function ensureMapInit() {
+function setActiveTab(viewId) {
+  // show correct section
+  document.querySelectorAll(".view-section").forEach((sec) => {
+    sec.classList.toggle("active", sec.id === viewId);
+  });
+
+  // highlight nav item
+  document.querySelectorAll("nav .nav-item").forEach((a) => {
+    a.classList.toggle("active", a.dataset.view === viewId);
+  });
+
+  // camera only on scan tab
+  if (viewId === "scan-view") startCamera();
+  else stopCamera();
+
+  // init map once + resize after visible
+  if (viewId === "map-view") {
+    initMapOnce();
+    setTimeout(() => {
+      try { map?.invalidateSize(true); } catch (e) {}
+    }, 200);
+  }
+}
+
+function initMapOnce() {
   if (map) return;
+
   const mapEl = document.getElementById("map");
-  if (!mapEl) return;
+  if (!mapEl) {
+    console.error("❌ #map element not found");
+    return;
+  }
 
   map = L.map("map").setView([41.65, 41.64], 13);
+
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap",
   }).addTo(map);
-}
-
-function switchTab(viewId, navElement) {
-  // prevent <a href="#"> default jump
-  if (window.event) window.event.preventDefault();
-
-  showLoading();
-
-  setTimeout(() => {
-    // sections
-    document.querySelectorAll(".view-section").forEach((v) => v.classList.remove("active"));
-    document.getElementById(viewId)?.classList.add("active");
-
-    // nav highlight
-    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
-    navElement?.classList.add("active");
-
-    // camera only on scan tab
-    if (viewId === "scan-view") startCamera();
-    else stopCamera();
-
-    // map init + resize when tab becomes visible
-    if (viewId === "map-view") {
-      ensureMapInit();
-      setTimeout(() => {
-        try { map?.invalidateSize(true); } catch (_) {}
-      }, 200);
-    }
-
-    hideLoading();
-  }, 150);
 }
 
 
@@ -241,52 +240,17 @@ function switchTab(viewId, navElement) {
 document.addEventListener("DOMContentLoaded", async () => {
   await initAuth();
 
-  document.addEventListener("click", async (e) => {
-    const btn = e.target.closest(".btn-buy");
-    if (!btn) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (!authToken) {
-      alert("Not authenticated yet.");
-      return;
-    }
-
-    const rewardId = btn.dataset.rewardId;
-    if (!rewardId) {
-      alert("Missing data-reward-id on BUY button.");
-      return;
-    }
-
-    showLoading();
-    try {
-      const res = await fetch(`${API_BASE}/api/rewards/${rewardId}/buy`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-      });
-
-      const data = await res.json();
-      hideLoading();
-
-      if (!res.ok || !data.success) {
-        alert(`❌ ${data.message || "Could not buy reward."}`);
-        return;
-      }
-
-      const balanceElement = document.querySelector(".coin-balance");
-      if (balanceElement) {
-        balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
-      }
-
-      alert(`✅ Voucher created!\n${data.voucher.redeemUrl}`);
-    } catch (err) {
-      hideLoading();
-      console.error("BUY error:", err);
-      alert("Network error buying reward.");
-    }
+    document.querySelectorAll("nav .nav-item").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const viewId = a.dataset.view;
+      if (!viewId) return;
+      setActiveTab(viewId);
+    });
   });
 
+  // default
+  setActiveTab("scan-view");
   // Start camera if scan view is active
   const scanView = document.getElementById("scan-view");
   if (scanView && scanView.classList.contains("active")) startCamera();
