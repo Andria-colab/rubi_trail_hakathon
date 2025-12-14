@@ -22,6 +22,22 @@ function getAuthHeaders() {
   };
 }
 
+function setCoinBalance(value) {
+  // Works with both:
+  // 1) <span id="coin-count">0</span> ...
+  // 2) <div class="coin-balance"> ... </div> (older)
+  const coinCount = document.getElementById("coin-count");
+  if (coinCount) {
+    coinCount.textContent = String(value ?? 0);
+    return;
+  }
+
+  const balanceElement = document.querySelector(".coin-balance");
+  if (balanceElement) {
+    balanceElement.innerHTML = `${value ?? 0} <div class="coin-icon"></div>`;
+  }
+}
+
 // ---------------- AUTH ----------------
 // ✅ Real auth: Telegram injects initData when launched as a Mini App
 async function initAuth() {
@@ -67,16 +83,78 @@ async function initAuth() {
 
     authToken = data.token;
 
-    const balanceElement = document.querySelector(".coin-balance");
-    if (balanceElement && data.user) {
-      balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
-    }
+    if (data.user) setCoinBalance(data.user.coins);
   } catch (err) {
     console.error("Auth failed:", err);
     alert("Could not connect to backend (auth).");
   }
 }
 
+// ---------------- REWARDS (NEW - IMPORTANT) ----------------
+async function loadRewards() {
+  const container = document.getElementById("rewards-list");
+  if (!container) return;
+
+  if (!authToken) {
+    container.innerHTML = `<div style="padding:16px;">Not authenticated yet.</div>`;
+    return;
+  }
+
+  showLoading();
+  try {
+    const res = await fetch(`${API_BASE}/api/rewards`, {
+      method: "GET",
+      headers: getAuthHeaders(),
+    });
+
+    const data = await res.json();
+    hideLoading();
+
+    if (!res.ok) {
+      console.error("Rewards load error:", data);
+      container.innerHTML = `<div style="padding:16px;">❌ ${data.error || "Failed to load rewards"}</div>`;
+      return;
+    }
+
+    // Update coins shown in header
+    if (typeof data.userCoins !== "undefined") setCoinBalance(data.userCoins);
+
+    const rewards = Array.isArray(data.rewards) ? data.rewards : [];
+    if (rewards.length === 0) {
+      container.innerHTML = `<div style="padding:16px;">No rewards available.</div>`;
+      return;
+    }
+
+    // Render reward cards (keeps your .card/.card-content styles)
+    container.innerHTML = rewards.map((r) => {
+      const img =
+        (r.service && r.service.logoUrl) ||
+        "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=400&q=80";
+
+      const serviceName = (r.service && r.service.name) ? r.service.name : "Partner";
+      const desc = r.description || "";
+
+      return `
+        <div class="card">
+          <img src="${img}" class="card-img" alt="${serviceName}">
+          <div class="card-content">
+            <div>
+              <div class="card-title">${r.title}</div>
+              <div class="card-reward">PRICE: ${r.priceCoins} <div class="coin-small"></div></div>
+              <div class="card-location">${serviceName}</div>
+              <p class="card-desc">${desc}</p>
+            </div>
+            <button class="btn-buy" data-reward-id="${r.id}" type="button">BUY</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (err) {
+    hideLoading();
+    console.error("Rewards load exception:", err);
+    container.innerHTML = `<div style="padding:16px;">❌ Network error loading rewards</div>`;
+  }
+}
 
 // ---------------- CAMERA + SCAN ----------------
 const videoElement = document.getElementById("camera-stream");
@@ -148,10 +226,7 @@ async function handleQRCode(decodedText) {
       return;
     }
 
-    const balanceElement = document.querySelector(".coin-balance");
-    if (balanceElement) {
-      balanceElement.innerHTML = `${data.newBalance} <div class="coin-icon"></div>`;
-    }
+    if (typeof data.newBalance !== "undefined") setCoinBalance(data.newBalance);
 
     alert(`✅ Scan accepted!\n+${data.addedCoins} coins`);
     startCamera();
@@ -190,9 +265,6 @@ function scanLoop() {
 }
 
 // ---------------- TAB SWITCH + MAP (FIXED) ----------------
-// ✅ IMPORTANT FIXES:
-// 1) remove duplicate map system (keep ONLY leafletMap)
-// 2) setActiveTab calls initMapOnce() and invalidates leafletMap (not "map")
 function setActiveTab(viewId) {
   // show correct section
   document.querySelectorAll(".view-section").forEach((sec) => {
@@ -208,6 +280,11 @@ function setActiveTab(viewId) {
   if (viewId === "scan-view") startCamera();
   else stopCamera();
 
+  // ✅ load rewards when rewards tab opens
+  if (viewId === "rewards-view") {
+    loadRewards();
+  }
+
   // init map once + resize after visible
   if (viewId === "map-view") {
     initMapOnce();
@@ -217,28 +294,53 @@ function setActiveTab(viewId) {
   }
 }
 
+// ---------------- BUY BUTTONS (NEW - IMPORTANT) ----------------
+// Delegated handler so dynamically rendered rewards still work
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".btn-buy");
+  if (!btn) return;
 
-// ---------------- BUY BUTTONS ----------------
-document.addEventListener("DOMContentLoaded", async () => {
-  await initAuth();
+  e.preventDefault();
+  e.stopPropagation();
 
-  document.querySelectorAll("nav .nav-item").forEach((a) => {
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      const viewId = a.dataset.view;
-      if (!viewId) return;
-      setActiveTab(viewId);
+  if (!authToken) {
+    alert("Not authenticated yet.");
+    return;
+  }
+
+  const rewardId = btn.dataset.rewardId;
+  if (!rewardId) {
+    alert("Missing data-reward-id on BUY button.");
+    return;
+  }
+
+  showLoading();
+  try {
+    const res = await fetch(`${API_BASE}/api/rewards/${rewardId}/buy`, {
+      method: "POST",
+      headers: getAuthHeaders(),
     });
-  });
 
-  // default
-  setActiveTab("scan-view");
+    const data = await res.json();
+    hideLoading();
 
-  // Start camera if scan view is active
-  const scanView = document.getElementById("scan-view");
-  if (scanView && scanView.classList.contains("active")) startCamera();
+    if (!res.ok || !data.success) {
+      alert(`❌ ${data.message || "Could not buy reward."}`);
+      return;
+    }
+
+    if (typeof data.newBalance !== "undefined") setCoinBalance(data.newBalance);
+
+    alert(`✅ Voucher created!\n${data.voucher?.redeemUrl || ""}`);
+
+    // refresh rewards so user sees updated state (optional but helpful)
+    loadRewards();
+  } catch (err) {
+    hideLoading();
+    console.error("BUY error:", err);
+    alert("Network error buying reward.");
+  }
 });
-
 
 // ---------------- MAP (KEEP ONE SYSTEM) ----------------
 let leafletMap = null;
@@ -247,7 +349,6 @@ let mapReady = false;
 
 // TEMP demo points (aligned to Batumi / your backend seed coords)
 const MAP_POINTS = [
-  // -------- ATTRACTIONS --------
   {
     type: "attraction",
     name: "Ali and Nino",
@@ -272,8 +373,6 @@ const MAP_POINTS = [
     reward: 10,
     imgUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTg1Jsw8MUbLboM9usq0ZrNebJ63j6Beze7vQ&s"
   },
-
-  // -------- REWARDS / PARTNERS (demo nearby) --------
   {
     type: "reward",
     name: "Restaurant: Tavaduri",
@@ -317,14 +416,12 @@ function initMapOnce() {
     }
   ).addTo(leafletMap);
 
-  // ✅ center around Batumi / attractions
   leafletMap.setView([41.6539, 41.6360], 14);
 
   renderMapPoints(MAP_POINTS);
 
   mapReady = true;
 
-  // Important: map needs a resize once it's visible
   setTimeout(() => leafletMap.invalidateSize(), 50);
 }
 
@@ -353,3 +450,24 @@ function renderMapPoints(points) {
     leafletMarkers.push(marker);
   });
 }
+
+// ---------------- INIT ----------------
+document.addEventListener("DOMContentLoaded", async () => {
+  await initAuth();
+
+  document.querySelectorAll("nav .nav-item").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const viewId = a.dataset.view;
+      if (!viewId) return;
+      setActiveTab(viewId);
+    });
+  });
+
+  // default
+  setActiveTab("scan-view");
+
+  // Start camera if scan view is active
+  const scanView = document.getElementById("scan-view");
+  if (scanView && scanView.classList.contains("active")) startCamera();
+});
