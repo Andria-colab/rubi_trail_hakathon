@@ -1,7 +1,11 @@
 import os
 import secrets
+import hmac
+import hashlib
+import json
 from datetime import datetime
 from io import BytesIO
+from urllib.parse import parse_qsl
 
 import qrcode
 import requests
@@ -9,16 +13,9 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
-import hmac
-import hashlib
-import json
-from urllib.parse import parse_qsl
-
-
 
 # -----------------------
 # FLASK SETUP
-# Serve frontend directly from /frontend
 # -----------------------
 app = Flask(__name__, static_folder="frontend", static_url_path="")
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -35,29 +32,6 @@ db = SQLAlchemy(app)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
-
-
-def verify_telegram_init_data(init_data: str):
-    if not TELEGRAM_BOT_TOKEN or not init_data:
-        return None
-
-    data = dict(parse_qsl(init_data, keep_blank_values=True))
-    hash_received = data.pop("hash", None)
-    if not hash_received:
-        return None
-
-    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
-    secret = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
-    hash_calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
-
-    if not hmac.compare_digest(hash_calc, hash_received):
-        return None
-
-    user_json = data.get("user")
-    if not user_json:
-        return None
-
-    return json.loads(user_json)
 
 # -----------------------
 # DATABASE MODELS
@@ -121,7 +95,7 @@ class Voucher(db.Model):
     service_id = db.Column(db.Integer, db.ForeignKey("services.id"), nullable=False)
 
     redeem_token = db.Column(db.String(64), unique=True, nullable=False)
-    status = db.Column(db.String(16), nullable=False, default="ACTIVE")  # ACTIVE / REDEEMED
+    status = db.Column(db.String(16), nullable=False, default="ACTIVE")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     redeemed_at = db.Column(db.DateTime)
 
@@ -131,30 +105,23 @@ class Voucher(db.Model):
 
 
 # -----------------------
-# STARTUP DB INIT + SAFE SEED
+# DB INIT + SEED
 # -----------------------
 def seed_if_empty():
-    # If already seeded, do nothing
     if Reward.query.first() is not None:
-        print("✅ Seed skipped (already has rewards)")
         return
 
-    print("🌱 Seeding initial data...")
-
-    # Services
     s1 = Service(name="Tavaduri", logo_url="", description="Cozy restaurant.")
     s2 = Service(name="Art House Cafe", logo_url="", description="Cafe.")
     s3 = Service(name="Museum of Arts", logo_url="", description="Museum.")
     db.session.add_all([s1, s2, s3])
-    db.session.flush()  # gets IDs
+    db.session.flush()
 
-    # Rewards
     r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=200)
     r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=150)
     r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=100)
     db.session.add_all([r1, r2, r3])
 
-    # Attractions
     a1 = Attraction(
         title="Ali and Nino",
         description="Batumi Boulevard attraction.",
@@ -170,7 +137,7 @@ def seed_if_empty():
         address="Batumi Boulevard",
         lat=41.656088567441216,
         lon=41.639600470801206,
-        reward_coins=100,
+        reward_coins=10,
         qr_code_value="AliAndNiNoVisit90",
     )
     a3 = Attraction(
@@ -185,7 +152,7 @@ def seed_if_empty():
     db.session.add_all([a1, a2, a3])
 
     db.session.commit()
-    print("✅ Seeded services/rewards/attractions")
+    print("✅ Seeded demo data")
 
 
 with app.app_context():
@@ -195,32 +162,44 @@ with app.app_context():
 
 
 # -----------------------
-# TELEGRAM HELPERS
+# TELEGRAM VERIFY
+# -----------------------
+def verify_telegram_init_data(init_data: str):
+    if not TELEGRAM_BOT_TOKEN or not init_data:
+        return None
+
+    data = dict(parse_qsl(init_data, keep_blank_values=True))
+    hash_received = data.pop("hash", None)
+    if not hash_received:
+        return None
+
+    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
+    secret = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
+    hash_calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(hash_calc, hash_received):
+        return None
+
+    user_json = data.get("user")
+    if not user_json:
+        return None
+
+    return json.loads(user_json)
+
+
+# -----------------------
+# TELEGRAM SENDERS
 # -----------------------
 def send_telegram_message(chat_id: str, text: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN not set -> skipping telegram message")
         return False
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        resp = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": False},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            print("Telegram sendMessage failed:", resp.status_code, resp.text)
-            return False
-        return True
-    except Exception as e:
-        print("Telegram sendMessage exception:", repr(e))
-        return False
+    r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    return r.ok
 
 
 def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN not set -> skipping QR send")
         return False
 
     img = qrcode.make(qr_payload)
@@ -229,25 +208,17 @@ def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
     buf.seek(0)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    try:
-        r = requests.post(
-            url,
-            data={"chat_id": chat_id, "caption": caption},
-            files={"photo": ("voucher.png", buf, "image/png")},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            print("Telegram sendPhoto failed:", r.status_code, r.text)
-            return False
-        return True
-    except Exception as e:
-        print("Telegram sendPhoto exception:", repr(e))
-        return False
+    r = requests.post(
+        url,
+        data={"chat_id": chat_id, "caption": caption},
+        files={"photo": ("voucher.png", buf, "image/png")},
+        timeout=15,
+    )
+    return r.ok
 
 
 # -----------------------
-# AUTH
-# Frontend uses: Authorization: Bearer <user_id>
+# AUTH / SESSION
 # -----------------------
 def get_current_user():
     auth = request.headers.get("Authorization", "")
@@ -259,7 +230,7 @@ def get_current_user():
 
 
 # -----------------------
-# FRONTEND SERVE
+# FRONTEND
 # -----------------------
 @app.get("/")
 def serve_index():
@@ -272,16 +243,17 @@ def health():
 
 
 # -----------------------
-# API ROUTES
+# API
 # -----------------------
 @app.post("/auth/telegram")
 def auth_telegram():
     body = request.get_json(silent=True) or {}
-    init_data = body.get("initData", "")
 
+    init_data = (body.get("initData") or "").strip()
     tg_user = verify_telegram_init_data(init_data)
+
     if not tg_user:
-        return jsonify({"error": "Invalid Telegram auth"}), 401
+        return jsonify({"error": "Not launched as Telegram Mini App (no valid initData)."}), 401
 
     telegram_id = str(tg_user["id"])
     name = (
@@ -318,7 +290,6 @@ def scan_attraction():
 
     data = request.get_json(silent=True) or {}
     qr_value = (data.get("qrText") or data.get("code") or "").strip()
-
     if not qr_value:
         return jsonify({"success": False, "message": "No QR code provided"}), 400
 
@@ -328,23 +299,13 @@ def scan_attraction():
 
     existing = Visit.query.filter_by(user_id=user.id, attraction_id=attraction.id).first()
     if existing:
-        return jsonify({
-            "success": False,
-            "message": "You already claimed this spot.",
-            "newBalance": user.coins,
-            "addedCoins": 0
-        })
+        return jsonify({"success": False, "message": "Already claimed.", "newBalance": user.coins, "addedCoins": 0})
 
     user.coins += attraction.reward_coins
     db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
     db.session.commit()
 
-    return jsonify({
-        "success": True,
-        "message": f"You discovered {attraction.title}!",
-        "addedCoins": attraction.reward_coins,
-        "newBalance": user.coins
-    })
+    return jsonify({"success": True, "message": "Scan accepted!", "newBalance": user.coins, "addedCoins": attraction.reward_coins})
 
 
 @app.get("/api/rewards")
@@ -404,62 +365,49 @@ def buy_reward(reward_id: int):
     redeem_url = f"{base_url}/v/{token}"
 
     caption = f"🎫 Your Rubi Trail voucher\n{reward.title}\n\nOpen: {redeem_url}"
-    sent_qr = send_telegram_qr(user.telegram_id, caption, redeem_url)
-    if not sent_qr:
+    sent = send_telegram_qr(user.telegram_id, caption, redeem_url)
+    if not sent:
         send_telegram_message(user.telegram_id, caption)
 
     return jsonify({
         "success": True,
         "message": "Voucher created.",
         "newBalance": user.coins,
-        "voucher": {
-            "id": voucher.id,
-            "redeemUrl": redeem_url,
-            "rewardTitle": reward.title,
-            "serviceName": reward.service.name
-        },
+        "voucher": {"id": voucher.id, "redeemUrl": redeem_url},
     })
 
 
-# ---- PUBLIC VOUCHER PAGE (/v/<token>) ----
 VOUCHER_TEMPLATE = """<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rubi Voucher</title></head>
-<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f4f5f7;margin:0;">
-  <div style="background:white;padding:24px;border-radius:16px;max-width:420px;width:100%;text-align:center;">
-    {% if invalid %}
-      <h2>Voucher invalid or already redeemed.</h2>
-    {% else %}
-      <h2>{{ service.name }}</h2>
-      <h3>{{ reward.title }}</h3>
-      <p>{{ reward.description }}</p>
-      <p><b>Status:</b> {{ voucher.status }}</p>
-      <button id="redeem-btn" style="padding:12px 24px;border-radius:999px;border:none;background:#e53935;color:white;font-weight:700;cursor:pointer;">
-        Redeem now
-      </button>
-      <p id="msg"></p>
-      <script>
-        const token = "{{ token }}";
-        const btn = document.getElementById("redeem-btn");
-        const msg = document.getElementById("msg");
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
-          btn.textContent = "Processing...";
-          const res = await fetch("/api/vouchers/redeem", {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ token })
-          });
-          const data = await res.json();
-          msg.textContent = data.success ? "Redeemed ✅" : (data.message || "Invalid");
-          btn.style.display = "none";
-        });
-      </script>
-    {% endif %}
-  </div>
-</body></html>
-"""
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f5f7;margin:0;">
+<div style="background:#fff;padding:24px;border-radius:16px;max-width:420px;width:100%;text-align:center;">
+{% if invalid %}
+<h2>Voucher invalid or already redeemed.</h2>
+{% else %}
+<h2>{{ service.name }}</h2>
+<h3>{{ reward.title }}</h3>
+<p>{{ reward.description }}</p>
+<p><b>Status:</b> {{ voucher.status }}</p>
+<button id="redeem-btn" style="padding:12px 24px;border-radius:999px;border:none;background:#e53935;color:#fff;font-weight:700;cursor:pointer;">Redeem now</button>
+<p id="msg"></p>
+<script>
+const token="{{ token }}";
+document.getElementById("redeem-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("redeem-btn");
+  btn.disabled = true;
+  btn.textContent = "Processing...";
+  const res = await fetch("/api/vouchers/redeem", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ token })
+  });
+  const data = await res.json();
+  document.getElementById("msg").textContent = data.success ? "Redeemed ✅" : (data.message || "Invalid");
+  btn.style.display="none";
+});
+</script>
+{% endif %}
+</div></body></html>"""
 
 
 @app.get("/v/<token>")
@@ -467,15 +415,7 @@ def voucher_page(token: str):
     v = Voucher.query.filter_by(redeem_token=token).first()
     if not v or v.status != "ACTIVE":
         return render_template_string(VOUCHER_TEMPLATE, invalid=True)
-
-    return render_template_string(
-        VOUCHER_TEMPLATE,
-        invalid=False,
-        token=token,
-        voucher=v,
-        reward=v.reward,
-        service=v.service
-    )
+    return render_template_string(VOUCHER_TEMPLATE, invalid=False, token=token, voucher=v, reward=v.reward, service=v.service)
 
 
 @app.post("/api/vouchers/redeem")
