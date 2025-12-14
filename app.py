@@ -18,7 +18,10 @@ from flask_cors import CORS
 # FLASK SETUP
 # -----------------------
 app = Flask(__name__, static_folder="frontend", static_url_path="")
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": [
+    "https://rubi-trail-hakathon.vercel.app",
+    "https://rubi-trail-hakathon-git-main-<your>.vercel.app"
+]}})
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.path.join(BASE_DIR, "instance", "rubi_trail.db")

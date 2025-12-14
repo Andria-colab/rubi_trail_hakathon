@@ -28,35 +28,40 @@ async function initAuth() {
   try {
     const tg = window.Telegram?.WebApp;
 
-    // Expand app (nice UX)
-    try { tg?.expand(); } catch (e) {}
+    try { tg?.expand(); } catch (_) {}
 
     const initData = tg?.initData || "";
-    const initUnsafe = tg?.initDataUnsafe || {};
+    const user = tg?.initDataUnsafe?.user || null;
+
     console.log("Telegram WebApp exists?", Boolean(tg));
     console.log("initData length:", initData.length);
-    console.log("initDataUnsafe:", initUnsafe);
+    console.log("user:", user);
 
-    // If initData missing, you're NOT launched as a Mini App.
-    // This happens even if you clicked a link inside chat.
-    if (!initData) {
+    if (!initData || !user?.id) {
       alert(
-        "This link is opened as a normal browser tab.\n\n" +
-        "Open it as a Telegram Mini App (via bot button / startapp) so Telegram can provide login."
+        "Telegram didn't provide login data.\n\n" +
+        "Open using the bot's 'Open RubiTrail' button (Mini App), not a normal link."
       );
       return;
     }
 
+    const payload = {
+      initData,                         // for verification (best)
+      telegram_id: String(user.id),     // for creating/finding user
+      name: [user.first_name, user.last_name].filter(Boolean).join(" "),
+    };
+
     const res = await fetch(`${API_BASE}/auth/telegram`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify(payload),
     });
 
     const data = await res.json();
+
     if (!res.ok) {
       console.error("Auth error:", data);
-      alert("Telegram auth failed. Check backend logs.");
+      alert(data.error || "Telegram auth failed. Check backend logs.");
       return;
     }
 
@@ -71,6 +76,7 @@ async function initAuth() {
     alert("Could not connect to backend (auth).");
   }
 }
+
 
 // ---------------- CAMERA + SCAN ----------------
 const videoElement = document.getElementById("camera-stream");
