@@ -116,7 +116,6 @@
         overflow-x: hidden;
         padding: 15px;
         scroll-behavior: smooth;
-        padding-bottom: 90px;
     }
 
     .view-section.active {
