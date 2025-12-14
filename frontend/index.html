@@ -2,21 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Rubi Trail</title>
 
-  <!-- Styles -->
   <link rel="stylesheet" href="./style.css" />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <!-- Telegram Mini App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <style>
+    /* safety so map always has height */
+    #map { width: 100%; height: 100%; }
+  </style>
 </head>
 
 <body>
@@ -44,29 +42,25 @@
     <!-- SCAN -->
     <section id="scan-view" class="view-section active">
       <video id="camera-stream" autoplay playsinline muted></video>
-
       <div class="scan-overlay">
         <div class="scan-text">Align the QR code inside the frame</div>
         <div class="scan-frame"></div>
       </div>
     </section>
 
-    <!-- DISCOVER -->
+    <!-- DISCOVER (✅ now 3 cards) -->
     <section id="discover-view" class="view-section">
       <div class="card">
         <img
           src="https://cdn.georgia.to/img/thumbnails/4SPspoJhk72WETe3sSjND5_smedium.jpg"
           class="card-img"
+          alt="Alphabetic Tower"
         />
         <div class="card-content">
           <div class="card-title">Alphabetic Tower</div>
-          <div class="card-reward">
-            REWARD: 10 <div class="coin-small"></div>
-          </div>
+          <div class="card-reward">REWARD: 10 <div class="coin-small"></div></div>
           <div class="card-location">Batumi Boulevard</div>
-          <p class="card-desc">
-            A modern symbol celebrating the Georgian alphabet and culture.
-          </p>
+          <p class="card-desc">A modern symbol celebrating the Georgian alphabet and culture.</p>
         </div>
       </div>
 
@@ -74,25 +68,34 @@
         <img
           src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSnu5nA0CdvI7yiZIQv-DLOpP2gtfjQCZF-vQ&s"
           class="card-img"
+          alt="Ali and Nino"
         />
         <div class="card-content">
           <div class="card-title">Ali and Nino</div>
-          <div class="card-reward">
-            REWARD: 10 <div class="coin-small"></div>
-          </div>
+          <div class="card-reward">REWARD: 10 <div class="coin-small"></div></div>
           <div class="card-location">Batumi Boulevard</div>
-          <p class="card-desc">
-            Iconic statue symbolizing eternal love.
-          </p>
+          <p class="card-desc">Iconic statue symbolizing eternal love.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <img
+          src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTg1Jsw8MUbLboM9usq0ZrNebJ63j6Beze7vQ&s"
+          class="card-img"
+          alt="GITA TouristHack 2025"
+        />
+        <div class="card-content">
+          <div class="card-title">GITA TouristHack 2025</div>
+          <div class="card-reward">REWARD: 10 <div class="coin-small"></div></div>
+          <div class="card-location">Batumi Tech Park</div>
+          <p class="card-desc">Innovation hackathon where teams build real tourism solutions.</p>
         </div>
       </div>
     </section>
 
-    <!-- REWARDS -->
+    <!-- REWARDS (loaded from backend) -->
     <section id="rewards-view" class="view-section">
-      <div id="rewards-list">
-        <!-- Loaded from backend -->
-      </div>
+      <div id="rewards-list"></div>
     </section>
 
     <!-- MAP -->
@@ -104,20 +107,16 @@
   <!-- NAVIGATION -->
   <nav>
     <a href="#" class="nav-item active" data-view="scan-view">
-      <span class="nav-icon">📷</span>
-      Scan
+      <span class="nav-icon">📷</span> Scan
     </a>
     <a href="#" class="nav-item" data-view="discover-view">
-      <span class="nav-icon">🔍</span>
-      Discover
+      <span class="nav-icon">🔍</span> Discover
     </a>
     <a href="#" class="nav-item" data-view="rewards-view">
-      <span class="nav-icon">🏆</span>
-      Rewards
+      <span class="nav-icon">🏆</span> Rewards
     </a>
     <a href="#" class="nav-item" data-view="map-view">
-      <span class="nav-icon">🗺️</span>
-      Map
+      <span class="nav-icon">🗺️</span> Map
     </a>
   </nav>
 

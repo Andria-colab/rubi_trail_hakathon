@@ -189,11 +189,10 @@ function scanLoop() {
   requestAnimationFrame(scanLoop);
 }
 
-// ---------------- TAB SWITCH ----------------
-// ---------------- TAB SWITCH (FIXED) ----------------
-// ---------------- TABS + MAP (RELIABLE) ----------------
-let map = null;
-
+// ---------------- TAB SWITCH + MAP (FIXED) ----------------
+// ✅ IMPORTANT FIXES:
+// 1) remove duplicate map system (keep ONLY leafletMap)
+// 2) setActiveTab calls initMapOnce() and invalidates leafletMap (not "map")
 function setActiveTab(viewId) {
   // show correct section
   document.querySelectorAll(".view-section").forEach((sec) => {
@@ -213,26 +212,9 @@ function setActiveTab(viewId) {
   if (viewId === "map-view") {
     initMapOnce();
     setTimeout(() => {
-      try { map?.invalidateSize(true); } catch (e) {}
+      try { leafletMap?.invalidateSize(true); } catch (e) {}
     }, 200);
   }
-}
-
-function initMapOnce() {
-  if (map) return;
-
-  const mapEl = document.getElementById("map");
-  if (!mapEl) {
-    console.error("❌ #map element not found");
-    return;
-  }
-
-  map = L.map("map").setView([41.65, 41.64], 13);
-
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap",
-  }).addTo(map);
 }
 
 
@@ -240,7 +222,7 @@ function initMapOnce() {
 document.addEventListener("DOMContentLoaded", async () => {
   await initAuth();
 
-    document.querySelectorAll("nav .nav-item").forEach((a) => {
+  document.querySelectorAll("nav .nav-item").forEach((a) => {
     a.addEventListener("click", (e) => {
       e.preventDefault();
       const viewId = a.dataset.view;
@@ -251,7 +233,123 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // default
   setActiveTab("scan-view");
+
   // Start camera if scan view is active
   const scanView = document.getElementById("scan-view");
   if (scanView && scanView.classList.contains("active")) startCamera();
 });
+
+
+// ---------------- MAP (KEEP ONE SYSTEM) ----------------
+let leafletMap = null;
+let leafletMarkers = [];
+let mapReady = false;
+
+// TEMP demo points (aligned to Batumi / your backend seed coords)
+const MAP_POINTS = [
+  // -------- ATTRACTIONS --------
+  {
+    type: "attraction",
+    name: "Ali and Nino",
+    lat: 41.6539,
+    lng: 41.6360,
+    reward: 10,
+    imgUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSnu5nA0CdvI7yiZIQv-DLOpP2gtfjQCZF-vQ&s"
+  },
+  {
+    type: "attraction",
+    name: "Alphabetic Tower",
+    lat: 41.656088567441216,
+    lng: 41.639600470801206,
+    reward: 10,
+    imgUrl: "https://cdn.georgia.to/img/thumbnails/4SPspoJhk72WETe3sSjND5_smedium.jpg"
+  },
+  {
+    type: "attraction",
+    name: "GITA TouristHack 2025",
+    lat: 41.62386745993197,
+    lng: 41.62490440795824,
+    reward: 10,
+    imgUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTg1Jsw8MUbLboM9usq0ZrNebJ63j6Beze7vQ&s"
+  },
+
+  // -------- REWARDS / PARTNERS (demo nearby) --------
+  {
+    type: "reward",
+    name: "Restaurant: Tavaduri",
+    lat: 41.6552,
+    lng: 41.6348,
+    price: 200,
+    imgUrl: "https://www.infobatumi.ge/wp-content/uploads/2023/12/saxinkle-tavaduri-INFOBATUMI-GE-01.jpg"
+  },
+  {
+    type: "reward",
+    name: "Cafe: Art House",
+    lat: 41.6570,
+    lng: 41.6390,
+    price: 150,
+    imgUrl: "https://cdn.prod.website-files.com/60b0468050505503acd961bd/62045f8ebc2ef914f276c0f2_ArtHouseCafe_print_8318_x.jpg"
+  },
+  {
+    type: "reward",
+    name: "Museum of Arts",
+    lat: 41.6518,
+    lng: 41.6376,
+    price: 100,
+    imgUrl: "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=300&q=80"
+  },
+];
+
+function initMapOnce() {
+  if (mapReady) return;
+
+  const mapDiv = document.getElementById("map");
+  if (!mapDiv) return;
+
+  leafletMap = L.map("map", { zoomControl: true });
+
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxZoom: 19,
+      attribution:
+        "Tiles &copy; Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+    }
+  ).addTo(leafletMap);
+
+  // ✅ center around Batumi / attractions
+  leafletMap.setView([41.6539, 41.6360], 14);
+
+  renderMapPoints(MAP_POINTS);
+
+  mapReady = true;
+
+  // Important: map needs a resize once it's visible
+  setTimeout(() => leafletMap.invalidateSize(), 50);
+}
+
+function renderMapPoints(points) {
+  leafletMarkers.forEach((m) => m.remove());
+  leafletMarkers = [];
+
+  points.forEach((p) => {
+    const label =
+      p.type === "attraction"
+        ? `<b>${p.name}</b><br/>Reward: ${p.reward} coins`
+        : `<b>${p.name}</b><br/>Price: ${p.price} coins`;
+
+    const icon = L.icon({
+      iconUrl: p.imgUrl,
+      iconSize: [44, 44],
+      iconAnchor: [22, 44],
+      popupAnchor: [0, -44],
+      className: "poi-icon",
+    });
+
+    const marker = L.marker([p.lat, p.lng], { icon })
+      .addTo(leafletMap)
+      .bindPopup(label);
+
+    leafletMarkers.push(marker);
+  });
+}
