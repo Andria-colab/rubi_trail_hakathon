@@ -5,8 +5,6 @@ console.log("🔥 FRONTEND SCRIPT LOADED");
 const API_BASE = "https://rubi-trail-hakathon.onrender.com";
 
 let authToken = null;
-let authReady = false;
-
 
 function showLoading() {
   const el = document.getElementById("loading");
@@ -75,40 +73,17 @@ async function initAuth() {
       body: JSON.stringify(payload),
     });
 
-let data = null;
-let rawText = "";
+    const data = await res.json();
 
-try {
-  rawText = await res.text();           // read as text first
-  data = rawText ? JSON.parse(rawText) : null; // then try JSON
-} catch (_) {
-  // not JSON, keep rawText
-}
+    if (!res.ok) {
+      console.error("Auth error:", data);
+      alert(data.error || "Telegram auth failed. Check backend logs.");
+      return;
+    }
 
-hideLoading();
+    authToken = data.token;
 
-if (!res.ok || !data?.success) {
-  const details =
-    (data && (data.message || data.error)) ||
-    rawText ||
-    `HTTP ${res.status}`;
-
-  alert(`❌ Scan failed\n\n${details}`);
-  startCamera();
-  return;
-}
-
-
-authToken = data.token;
-authReady = true;
-
-if (data.user) setCoinBalance(data.user.coins);
-
-// ✅ If user is already on Rewards tab, load now
-if (document.getElementById("rewards-view")?.classList.contains("active")) {
-  loadRewards();
-}
-
+    if (data.user) setCoinBalance(data.user.coins);
   } catch (err) {
     console.error("Auth failed:", err);
     alert("Could not connect to backend (auth).");
@@ -251,24 +226,10 @@ async function handleQRCode(decodedText) {
       return;
     }
 
-const placeName =
-  data.attraction?.name ||
-  data.attractionName ||
-  "Sightseeing";
+    if (typeof data.newBalance !== "undefined") setCoinBalance(data.newBalance);
 
-const story =
-  data.attraction?.description ||
-  data.description ||
-  "";
-
-alert(
-  `✅ Scan accepted!\n\n` +
-  `📍 ${placeName}\n` +
-  (story ? `\n📝 ${story}\n` : "") +
-  `\n🪙 +${data.addedCoins ?? 0} coins\n` +
-  `New balance: ${data.newBalance ?? "?"}`
-);
-
+    alert(`✅ Scan accepted!\n+${data.addedCoins} coins`);
+    startCamera();
   } catch (err) {
     hideLoading();
     console.error("SCAN FETCH ERROR:", err);

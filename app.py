@@ -322,19 +322,7 @@ def scan_attraction():
     db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
     db.session.commit()
 
-    return jsonify({
-    "success": True,
-    "addedCoins": attraction.reward_coins,
-    "newBalance": user.coins,
-    "attraction": {
-        "id": attraction.id,
-        "name": attraction.title,
-        "description": attraction.description,
-        "address": attraction.address,
-        "lat": attraction.lat,
-        "lon": attraction.lon
-    }
-})
+    return jsonify({"success": True, "message": "Scan accepted!", "newBalance": user.coins, "addedCoins": attraction.reward_coins})
 
 
 @app.get("/api/rewards")
