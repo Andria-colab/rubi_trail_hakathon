@@ -1,10 +1,3 @@
-alert(
-  "Telegram object: " + Boolean(window.Telegram) +
-  "\nWebApp: " + Boolean(window.Telegram?.WebApp) +
-  "\ninitData length: " + (window.Telegram?.WebApp?.initData?.length || 0) +
-  "\nOrigin: " + window.location.origin
-);
-
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
 // If you host frontend on the same backend, this auto-works.
@@ -197,22 +190,52 @@ function scanLoop() {
 }
 
 // ---------------- TAB SWITCH ----------------
+// ---------------- TAB SWITCH (FIXED) ----------------
+let map = null;
+
+function ensureMapInit() {
+  if (map) return;
+  const mapEl = document.getElementById("map");
+  if (!mapEl) return;
+
+  map = L.map("map").setView([41.65, 41.64], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap",
+  }).addTo(map);
+}
+
 function switchTab(viewId, navElement) {
+  // prevent <a href="#"> default jump
+  if (window.event) window.event.preventDefault();
+
   showLoading();
 
   setTimeout(() => {
+    // sections
     document.querySelectorAll(".view-section").forEach((v) => v.classList.remove("active"));
     document.getElementById(viewId)?.classList.add("active");
 
+    // nav highlight
     document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
-    navElement.classList.add("active");
+    navElement?.classList.add("active");
 
+    // camera only on scan tab
     if (viewId === "scan-view") startCamera();
     else stopCamera();
 
+    // map init + resize when tab becomes visible
+    if (viewId === "map-view") {
+      ensureMapInit();
+      setTimeout(() => {
+        try { map?.invalidateSize(true); } catch (_) {}
+      }, 200);
+    }
+
     hideLoading();
-  }, 250);
+  }, 150);
 }
+
 
 // ---------------- BUY BUTTONS ----------------
 document.addEventListener("DOMContentLoaded", async () => {
