@@ -168,6 +168,10 @@ with app.app_context():
 # TELEGRAM VERIFY
 # -----------------------
 def verify_telegram_init_data(init_data: str):
+    """
+    Verifies Telegram Mini App initData (WebAppData).
+    Returns the parsed tg user dict if valid, else None.
+    """
     if not TELEGRAM_BOT_TOKEN or not init_data:
         return None
 
@@ -176,9 +180,15 @@ def verify_telegram_init_data(init_data: str):
     if not hash_received:
         return None
 
+    # Build data_check_string
     check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
-    secret = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
-    hash_calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+
+    # ✅ Correct secret key for Mini Apps:
+    # secret_key = HMAC_SHA256("WebAppData", bot_token)
+    secret_key = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode(), hashlib.sha256).digest()
+
+    # Calculate hash
+    hash_calc = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(hash_calc, hash_received):
         return None
