@@ -9,22 +9,12 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
-from flask import send_from_directory
-
-@app.get("/")
-def serve_frontend():
-    return send_from_directory("frontend", "index.html")
-
-@app.get("/frontend/<path:filename>")
-def serve_static(filename):
-    return send_from_directory("frontend", filename)
-
-
 
 # -----------------------
-# BASIC FLASK SETUP
+# FLASK SETUP
+# Serve frontend directly from /frontend
 # -----------------------
-app = Flask(__name__)
+app = Flask(__name__, static_folder="frontend", static_url_path="")
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -112,11 +102,11 @@ class Voucher(db.Model):
 
 
 # -----------------------
-# TELEGRAM HELPERS (from your sqlite version)
+# TELEGRAM HELPERS
 # -----------------------
 def send_telegram_message(chat_id: str, text: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN is not set -> skipping telegram message")
+        print("TELEGRAM_BOT_TOKEN not set -> skipping telegram message")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -127,17 +117,17 @@ def send_telegram_message(chat_id: str, text: str) -> bool:
             timeout=10,
         )
         if resp.status_code != 200:
-            print("Telegram send failed:", resp.status_code, resp.text)
+            print("Telegram sendMessage failed:", resp.status_code, resp.text)
             return False
         return True
     except Exception as e:
-        print("Telegram send exception:", repr(e))
+        print("Telegram sendMessage exception:", repr(e))
         return False
 
 
 def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN is not set -> skipping QR send")
+        print("TELEGRAM_BOT_TOKEN not set -> skipping QR send")
         return False
 
     img = qrcode.make(qr_payload)
@@ -154,7 +144,7 @@ def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
             timeout=15,
         )
         if r.status_code != 200:
-            print("Telegram sendPhoto error:", r.text)
+            print("Telegram sendPhoto failed:", r.status_code, r.text)
             return False
         return True
     except Exception as e:
@@ -163,7 +153,8 @@ def send_telegram_qr(chat_id: str, caption: str, qr_payload: str) -> bool:
 
 
 # -----------------------
-# AUTH (matches your frontend: Bearer <user_id>)
+# AUTH
+# Frontend uses: Authorization: Bearer <user_id>
 # -----------------------
 def get_current_user():
     auth = request.headers.get("Authorization", "")
@@ -175,17 +166,29 @@ def get_current_user():
 
 
 # -----------------------
-# OPTIONAL: init/seed (your create_demo_data, but safer)
+# FRONTEND SERVE
+# -----------------------
+@app.get("/")
+def serve_index():
+    # serves frontend/index.html
+    return app.send_static_file("index.html")
+
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
+# -----------------------
+# DEV: init db + seed
 # -----------------------
 def create_demo_data():
     db.drop_all()
     db.create_all()
 
-    # Demo user (change telegram_id for YOUR account if you want to test DM)
     user = User(telegram_id="6732377993", name="Demo User", coins=0)
     db.session.add(user)
 
-    # Attractions
     a1 = Attraction(
         title="Ali and Nino",
         description="Batumi Boulevard attraction.",
@@ -215,14 +218,12 @@ def create_demo_data():
     )
     db.session.add_all([a1, a2, a3])
 
-    # Services
     s1 = Service(name="Tavaduri", logo_url="", description="Cozy restaurant.")
     s2 = Service(name="Art House Cafe", logo_url="", description="Cafe.")
     s3 = Service(name="Museum of Arts", logo_url="", description="Museum.")
     db.session.add_all([s1, s2, s3])
     db.session.flush()
 
-    # Rewards
     r1 = Reward(service_id=s1.id, title="Tavaduri 20% Cashback", description="Max 40 GEL", price_coins=20)
     r2 = Reward(service_id=s2.id, title="Art House 15% Cashback", description="Max 30 GEL", price_coins=15)
     r3 = Reward(service_id=s3.id, title="Free entrance", description="Free entry", price_coins=10)
@@ -232,25 +233,15 @@ def create_demo_data():
     print("✅ Demo data created. Demo User ID:", user.id)
 
 
-# -----------------------
-# ROUTES
-# -----------------------
-@app.get("/")
-def home():
-    return jsonify({"ok": True, "service": "rubi-trail-backend"})
-
-
-@app.get("/health")
-def health():
-    return jsonify({"status": "ok"}), 200
-
-
 @app.get("/init-db")
 def init_db_route():
     create_demo_data()
     return "Database initialized with demo data."
 
 
+# -----------------------
+# API ROUTES
+# -----------------------
 @app.post("/auth/telegram")
 def auth_telegram():
     data = request.get_json(silent=True) or {}
@@ -289,7 +280,7 @@ def scan_attraction():
 
     data = request.get_json(silent=True) or {}
 
-    # ✅ Accept BOTH keys so your frontend + old code both work
+    # ✅ Accept both keys so frontend variants work
     qr_value = (data.get("qrText") or data.get("code") or "").strip()
     if not qr_value:
         return jsonify({"success": False, "message": "No QR code provided"}), 400
@@ -306,12 +297,7 @@ def scan_attraction():
     db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
     db.session.commit()
 
-    return jsonify({
-        "success": True,
-        "message": f"You discovered {attraction.title}!",
-        "addedCoins": attraction.reward_coins,
-        "newBalance": user.coins
-    })
+    return jsonify({"success": True, "message": f"You discovered {attraction.title}!", "addedCoins": attraction.reward_coins, "newBalance": user.coins})
 
 
 @app.get("/api/rewards")
@@ -354,7 +340,6 @@ def buy_reward(reward_id: int):
     if user.coins < reward.price_coins:
         return jsonify({"success": False, "message": "Not enough coins.", "newBalance": user.coins}), 400
 
-    # Deduct + create voucher
     user.coins -= reward.price_coins
     token = secrets.token_urlsafe(16)
     voucher = Voucher(
@@ -367,11 +352,10 @@ def buy_reward(reward_id: int):
     db.session.add(voucher)
     db.session.commit()
 
-    # ✅ Render-safe redeem URL (no localhost)
     base_url = request.host_url.rstrip("/")
     redeem_url = f"{base_url}/v/{token}"
 
-    # ✅ Send QR + also send text fallback
+    # Send QR + fallback text
     caption = f"🎫 Your Rubi Trail voucher\n{reward.title}\n\nOpen: {redeem_url}"
     sent_qr = send_telegram_qr(user.telegram_id, caption, redeem_url)
     if not sent_qr:
@@ -381,24 +365,16 @@ def buy_reward(reward_id: int):
         "success": True,
         "message": "Voucher created.",
         "newBalance": user.coins,
-        "voucher": {
-            "id": voucher.id,
-            "redeemUrl": redeem_url,
-            "rewardTitle": reward.title,
-            "serviceName": reward.service.name,
-        }
+        "voucher": {"id": voucher.id, "redeemUrl": redeem_url, "rewardTitle": reward.title, "serviceName": reward.service.name},
     })
 
 
 # ---- PUBLIC VOUCHER PAGE (/v/<token>) ----
 VOUCHER_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Rubi Voucher</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f4f5f7;">
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rubi Voucher</title></head>
+<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f4f5f7;margin:0;">
   <div style="background:white;padding:24px;border-radius:16px;max-width:420px;width:100%;text-align:center;">
     {% if invalid %}
       <h2>Voucher invalid or already redeemed.</h2>
@@ -430,8 +406,7 @@ VOUCHER_TEMPLATE = """<!DOCTYPE html>
       </script>
     {% endif %}
   </div>
-</body>
-</html>
+</body></html>
 """
 
 
@@ -441,14 +416,7 @@ def voucher_page(token: str):
     if not v or v.status != "ACTIVE":
         return render_template_string(VOUCHER_TEMPLATE, invalid=True)
 
-    return render_template_string(
-        VOUCHER_TEMPLATE,
-        invalid=False,
-        token=token,
-        voucher=v,
-        reward=v.reward,
-        service=v.service,
-    )
+    return render_template_string(VOUCHER_TEMPLATE, invalid=False, token=token, voucher=v, reward=v.reward, service=v.service)
 
 
 @app.post("/api/vouchers/redeem")
@@ -470,9 +438,6 @@ def redeem_voucher():
     return jsonify({"success": True, "message": "Voucher redeemed successfully"})
 
 
-# -----------------------
-# MAIN ENTRY POINT
-# -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=False)
