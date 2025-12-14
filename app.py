@@ -101,6 +101,11 @@ class Voucher(db.Model):
     service = db.relationship("Service", backref="vouchers")
 
 
+
+with app.app_context():
+    db.create_all()
+    print("✅ DB tables ensured (create_all)")
+
 # -----------------------
 # TELEGRAM HELPERS
 # -----------------------
