@@ -55,36 +55,48 @@ function debugModal() {
 // ---------- AUTH ----------
 
 async function initAuth() {
-    try {
-        const res = await fetch(`${API_BASE}/auth/telegram`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                telegram_id: "6732377993",
-                name: "Demo User"
-            })
-        });
+  try {
+    const tg = window.Telegram?.WebApp;
 
-        const data = await res.json();
-        authToken = data.token; // e.g. "1"
+    // If opened inside Telegram, this exists and is signed
+    const initData = tg?.initData || "";
+    const initDataUnsafe = tg?.initDataUnsafe || {};
+    const tgUser = initDataUnsafe?.user;
 
-        // update coin balance in header from backend
-        const balanceElement = document.querySelector(".coin-balance");
-        if (balanceElement && data.user) {
-            balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
-        }
-    } catch (err) {
-        console.error("Auth failed:", err);
-        alert("Could not connect to backend (auth). Is Flask running?");
+    // Optional: show Telegram user in console
+    console.log("Telegram user:", tgUser);
+
+    // If NOT opened inside Telegram, you can either block or allow dev mode.
+    if (!initData) {
+      alert("Open this app inside Telegram to login.");
+      return;
     }
+
+    const res = await fetch(`${API_BASE}/auth/telegram`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      console.error("Auth error:", data);
+      alert("Telegram auth failed.");
+      return;
+    }
+
+    authToken = data.token;
+
+    const balanceElement = document.querySelector(".coin-balance");
+    if (balanceElement && data.user) {
+      balanceElement.innerHTML = `${data.user.coins} <div class="coin-icon"></div>`;
+    }
+  } catch (err) {
+    console.error("Auth failed:", err);
+    alert("Could not connect to backend (auth).");
+  }
 }
 
-function getAuthHeaders() {
-    return {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + authToken
-    };
-}
 
 // ---------- TAB SWITCHING / CAMERA ----------
 

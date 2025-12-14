@@ -9,6 +9,12 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 
+import hmac
+import hashlib
+import json
+from urllib.parse import parse_qsl
+
+
 
 # -----------------------
 # FLASK SETUP
@@ -29,6 +35,29 @@ db = SQLAlchemy(app)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
+
+
+def verify_telegram_init_data(init_data: str):
+    if not TELEGRAM_BOT_TOKEN or not init_data:
+        return None
+
+    data = dict(parse_qsl(init_data, keep_blank_values=True))
+    hash_received = data.pop("hash", None)
+    if not hash_received:
+        return None
+
+    check_string = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
+    secret = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
+    hash_calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(hash_calc, hash_received):
+        return None
+
+    user_json = data.get("user")
+    if not user_json:
+        return None
+
+    return json.loads(user_json)
 
 # -----------------------
 # DATABASE MODELS
@@ -247,16 +276,22 @@ def health():
 # -----------------------
 @app.post("/auth/telegram")
 def auth_telegram():
-    data = request.get_json(silent=True) or {}
-    telegram_id = str(data.get("telegram_id", "")).strip()
-    name = str(data.get("name", "")).strip()
+    body = request.get_json(silent=True) or {}
+    init_data = body.get("initData", "")
 
-    if not telegram_id:
-        return jsonify({"error": "telegram_id required"}), 400
+    tg_user = verify_telegram_init_data(init_data)
+    if not tg_user:
+        return jsonify({"error": "Invalid Telegram auth"}), 401
+
+    telegram_id = str(tg_user["id"])
+    name = (
+        (tg_user.get("first_name", "") + " " + tg_user.get("last_name", "")).strip()
+        or tg_user.get("username", "User")
+    )
 
     user = User.query.filter_by(telegram_id=telegram_id).first()
     if not user:
-        user = User(telegram_id=telegram_id, name=name or "User", coins=0)
+        user = User(telegram_id=telegram_id, name=name, coins=0)
         db.session.add(user)
         db.session.commit()
     else:
@@ -264,10 +299,7 @@ def auth_telegram():
             user.name = name
             db.session.commit()
 
-    return jsonify({
-        "token": str(user.id),
-        "user": {"id": user.id, "name": user.name, "coins": user.coins}
-    })
+    return jsonify({"token": str(user.id), "user": {"id": user.id, "name": user.name, "coins": user.coins}})
 
 
 @app.get("/api/me")
