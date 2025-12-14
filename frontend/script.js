@@ -1,3 +1,10 @@
+alert(
+  "Telegram object: " + Boolean(window.Telegram) +
+  "\nWebApp: " + Boolean(window.Telegram?.WebApp) +
+  "\ninitData length: " + (window.Telegram?.WebApp?.initData?.length || 0) +
+  "\nOrigin: " + window.location.origin
+);
+
 console.log("🔥 FRONTEND SCRIPT LOADED");
 
 // If you host frontend on the same backend, this auto-works.
