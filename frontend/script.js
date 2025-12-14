@@ -75,13 +75,29 @@ async function initAuth() {
       body: JSON.stringify(payload),
     });
 
-    const data = await res.json();
+let data = null;
+let rawText = "";
 
-    if (!res.ok) {
-      console.error("Auth error:", data);
-      alert(data.error || "Telegram auth failed. Check backend logs.");
-      return;
-    }
+try {
+  rawText = await res.text();           // read as text first
+  data = rawText ? JSON.parse(rawText) : null; // then try JSON
+} catch (_) {
+  // not JSON, keep rawText
+}
+
+hideLoading();
+
+if (!res.ok || !data?.success) {
+  const details =
+    (data && (data.message || data.error)) ||
+    rawText ||
+    `HTTP ${res.status}`;
+
+  alert(`❌ Scan failed\n\n${details}`);
+  startCamera();
+  return;
+}
+
 
 authToken = data.token;
 authReady = true;
@@ -235,10 +251,24 @@ async function handleQRCode(decodedText) {
       return;
     }
 
-    if (typeof data.newBalance !== "undefined") setCoinBalance(data.newBalance);
+const placeName =
+  data.attraction?.name ||
+  data.attractionName ||
+  "Sightseeing";
 
-    alert(`✅ Scan accepted!\n+${data.addedCoins} coins`);
-    startCamera();
+const story =
+  data.attraction?.description ||
+  data.description ||
+  "";
+
+alert(
+  `✅ Scan accepted!\n\n` +
+  `📍 ${placeName}\n` +
+  (story ? `\n📝 ${story}\n` : "") +
+  `\n🪙 +${data.addedCoins ?? 0} coins\n` +
+  `New balance: ${data.newBalance ?? "?"}`
+);
+
   } catch (err) {
     hideLoading();
     console.error("SCAN FETCH ERROR:", err);

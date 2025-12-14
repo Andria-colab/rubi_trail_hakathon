@@ -12,7 +12,6 @@ import requests
 from flask import Flask, request, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from flask import abort
 
 
 # -----------------------
@@ -291,26 +290,7 @@ def auth_telegram():
         "user": {"id": user.id, "name": user.name, "coins": user.coins}
     }), 200
 
-# -----------------------
-# ATTRACTION LOOKUP (QR -> title/description)
-# -----------------------
-@app.get("/api/attractions/by-qr/<path:qr_value>")
-def get_attraction_by_qr(qr_value):
-    a = Attraction.query.filter_by(qr_code_value=qr_value).first()
-    if not a:
-        return jsonify({"error": "Unknown QR code"}), 404
 
-    return jsonify({
-        "id": a.id,
-        "title": a.title,
-        "description": a.description,
-        "address": a.address,
-        "lat": a.lat,
-        "lon": a.lon,
-        "reward_coins": a.reward_coins,
-        "qr_code_value": a.qr_code_value,
-    })
-    
 @app.get("/api/me")
 def api_me():
     user = get_current_user()
@@ -342,7 +322,19 @@ def scan_attraction():
     db.session.add(Visit(user_id=user.id, attraction_id=attraction.id))
     db.session.commit()
 
-    return jsonify({"success": True, "message": "Scan accepted!", "newBalance": user.coins, "addedCoins": attraction.reward_coins})
+    return jsonify({
+    "success": True,
+    "addedCoins": attraction.reward_coins,
+    "newBalance": user.coins,
+    "attraction": {
+        "id": attraction.id,
+        "name": attraction.title,
+        "description": attraction.description,
+        "address": attraction.address,
+        "lat": attraction.lat,
+        "lon": attraction.lon
+    }
+})
 
 
 @app.get("/api/rewards")
