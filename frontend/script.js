@@ -84,6 +84,20 @@ async function initAuth() {
     authToken = data.token;
 
     if (data.user) setCoinBalance(data.user.coins);
+
+const startParam = tg?.initDataUnsafe?.start_param || "";
+
+// prevent double redeem on refresh
+if (startParam) {
+  const key = `redeemed:${startParam}`;
+  if (!sessionStorage.getItem(key)) {
+    sessionStorage.setItem(key, "1");
+    // optional: switch to scan view or stay where you are
+    // setActiveTab("scan-view");
+    redeemCode(startParam, "nfc");
+  }
+}
+
   } catch (err) {
     console.error("Auth failed:", err);
     alert("Could not connect to backend (auth).");
@@ -199,13 +213,27 @@ function stopCamera() {
     localStream = null;
   }
 }
-
 async function handleQRCode(decodedText) {
   const payload = (decodedText || "").trim();
   if (!payload) return;
 
+  // stop the scan loop / camera BEFORE redeeming (prevents double triggers)
+  scanning = false;
+  stopCamera();
+
+  // unified redeem (same endpoint, same code)
+  await redeemCode(payload, "qr");
+
+  // resume scanning after redeem finishes (optional)
+  startCamera();
+}
+
+async function redeemCode(code, source = "qr") {
+  const payload = (code || "").trim();
+  if (!payload) return;
+
   if (!authToken) {
-    alert("Not authenticated yet. Open the app as a Telegram Mini App.");
+    alert("Not authenticated yet.");
     return;
   }
 
@@ -214,29 +242,44 @@ async function handleQRCode(decodedText) {
     const res = await fetch(`${API_BASE}/api/attractions/scan`, {
       method: "POST",
       headers: getAuthHeaders(),
-      body: JSON.stringify({ code: payload }),
+      body: JSON.stringify({ code: payload, source }), // source optional
     });
 
-    const data = await res.json();
+    // safer parsing (some errors may return HTML)
+    const rawText = await res.text();
+    let data = null;
+    try { data = rawText ? JSON.parse(rawText) : null; } catch (_) {}
+
     hideLoading();
 
-    if (!res.ok || !data.success) {
-      alert(`❌ ${data.message || data.error || "Scan failed"}`);
-      startCamera();
+    if (!res.ok || !data?.success) {
+      const details =
+        (data && (data.message || data.error)) ||
+        rawText ||
+        `HTTP ${res.status}`;
+      alert(`❌ Redeem failed\n\n${details}`);
       return;
     }
 
     if (typeof data.newBalance !== "undefined") setCoinBalance(data.newBalance);
 
-    alert(`✅ Scan accepted!\n+${data.addedCoins} coins`);
-    startCamera();
+    // ✅ show attraction + voucher if backend returns them
+    const aName = data.attraction?.name ? `\nPlace: ${data.attraction.name}` : "";
+    const aDesc = data.attraction?.description ? `\n\n${data.attraction.description}` : "";
+    const voucher = data.voucher?.redeemUrl ? `\n\nVoucher: ${data.voucher.redeemUrl}` : "";
+
+    alert(
+      `✅ Success!\n+${data.addedCoins ?? 0} coins\nNew balance: ${data.newBalance ?? "?"}` +
+      aName + aDesc + voucher
+    );
+
   } catch (err) {
     hideLoading();
-    console.error("SCAN FETCH ERROR:", err);
-    alert("Network error talking to backend when scanning QR.");
-    startCamera();
+    console.error("Redeem error:", err);
+    alert("Network error talking to backend.");
   }
 }
+
 
 function scanLoop() {
   if (!scanning) return;
